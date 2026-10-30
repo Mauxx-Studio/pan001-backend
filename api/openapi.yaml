@@ -1,0 +1,295 @@
+openapi: 3.0.3
+info:
+  title: pan001 backend API
+  description: Contrato de la API REST del backend de pan001.
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Entorno local
+paths:
+  /:
+    get:
+      summary: Health check / Hola Mundo
+      operationId: getHello
+      responses:
+        "200":
+          description: El servicio está vivo.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+                    example: Hola mundo con Fiber
+  /health:
+    get:
+      summary: Health check de la API y de la base de datos
+      description: Comprueba que el servidor responde y que PostgreSQL sigue accesible (hace un ping real).
+      operationId: getHealth
+      responses:
+        "200":
+          description: API y base de datos operativas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  database:
+                    type: string
+                    example: up
+        "503":
+          description: La base de datos no responde.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                    example: base de datos no disponible
+  /api/v1/auth/register:
+    post:
+      summary: Registrar un usuario
+      description: |
+        Crea un usuario con la contraseña hasheada con bcrypt (cost 12) y devuelve
+        un access token JWT. Por ahora el endpoint está abierto; más adelante se
+        restringirá a usuarios con rol `admin`.
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Usuario creado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Body inválido (email, password, full_name o rol fuera de la lista).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "datos inválidos: email debe ser un email válido"
+        "409":
+          description: El email ya está registrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el email ya está registrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: error interno del servidor
+  /api/v1/auth/login:
+    post:
+      summary: Iniciar sesión
+      description: |
+        Verifica las credenciales con bcrypt, actualiza `last_login_at` y devuelve
+        el usuario con un access token nuevo.
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Credenciales válidas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Body inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Email o contraseña incorrectos (incluye usuarios soft-deleted).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: email o contraseña incorrectos
+        "403":
+          description: El usuario está desactivado (`is_active = false`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el usuario está desactivado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/me:
+    get:
+      summary: Datos del usuario autenticado
+      description: |
+        Devuelve el usuario dueño del access token enviado en
+        `Authorization: Bearer <token>`. La ruta está protegida por el middleware
+        JWT: sin un token válido responde 401.
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Usuario autenticado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: |
+            Token ausente, con formato inválido, expirado o con firma inválida.
+            También cuando el usuario del token ya no existe o está desactivado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                sinToken:
+                  value:
+                    error: falta el header Authorization
+                tokenInvalido:
+                  value:
+                    error: token inválido o expirado
+                usuarioInexistente:
+                  value:
+                    error: el usuario del token ya no existe
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access token JWT (HS256) devuelto por `/api/v1/auth/register` y
+        `/api/v1/auth/login`. Se envía en el header `Authorization: Bearer <token>`.
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password, full_name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: maria@pan001.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          example: secreto123
+        full_name:
+          type: string
+          minLength: 2
+          maxLength: 150
+          example: María Pérez
+        phone:
+          type: string
+          maxLength: 30
+          example: "1155550000"
+        role:
+          type: string
+          enum: [admin, vendedor, panadero, cajero, supervisor]
+          default: vendedor
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: maria@pan001.com
+        password:
+          type: string
+          format: password
+          example: secreto123
+    AuthResponse:
+      type: object
+      required: [token, token_type, user]
+      properties:
+        token:
+          type: string
+          description: Access token JWT (HS256) con vigencia de 24 horas.
+        token_type:
+          type: string
+          example: Bearer
+        user:
+          $ref: "#/components/schemas/User"
+    User:
+      type: object
+      description: Usuario sin datos sensibles (nunca incluye password_hash).
+      required: [id, email, full_name, role, is_active]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 4c04cde9-8d4b-40ef-8e39-c6d032e36b9f
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+        role:
+          type: string
+          enum: [admin, vendedor, panadero, cajero, supervisor]
+        phone:
+          type: string
+        is_active:
+          type: boolean
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+        email_verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: el email ya está registrado
+

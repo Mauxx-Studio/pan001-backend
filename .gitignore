@@ -1,0 +1,28 @@
+# Binarios compilados
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Artefactos de test y cobertura
+*.test
+*.out
+coverage.html
+
+# Variables de entorno reales (nunca se versionan)
+.env
+.env.*
+!.env.example
+
+# Dependencias locales
+/vendor/
+
+# Archivos temporales y de editor
+*.log
+*.tmp
+.DS_Store
+.idea/
+.vscode/
