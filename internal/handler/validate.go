@@ -19,6 +19,18 @@ var fieldLabels = map[string]string{
 	"FullName": "full_name",
 	"Phone":    "phone",
 	"Role":     "role",
+
+	// Campos del módulo de terceros (contacts).
+	"Name":         "name",
+	"BusinessName": "business_name",
+	"TaxID":        "tax_id",
+	"WhatsApp":     "whatsapp",
+	"Address":      "address",
+	"City":         "city",
+	"Notes":        "notes",
+	"IsClient":     "is_client",
+	"IsSupplier":   "is_supplier",
+	"IsActive":     "is_active",
 }
 
 // newValidator crea el validador con las reglas propias del dominio.

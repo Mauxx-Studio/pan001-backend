@@ -54,6 +54,11 @@ y cierra el pool de conexiones de PostgreSQL antes de terminar.
 | `POST` | `/api/v1/auth/register` | `201 Created` · datos del usuario + token        |
 | `POST` | `/api/v1/auth/login`    | `200 OK` · datos del usuario + token             |
 | `GET`  | `/api/v1/auth/me`       | `200 OK` · usuario autenticado (requiere token)  |
+| `POST` | `/api/v1/contacts`      | `201 Created` · tercero creado (requiere token)  |
+| `GET`  | `/api/v1/contacts`      | `200 OK` · lista de terceros con filtros         |
+| `GET`  | `/api/v1/contacts/:id`  | `200 OK` · tercero (requiere token)              |
+| `PUT`  | `/api/v1/contacts/:id`  | `200 OK` · tercero actualizado (requiere token)  |
+| `DELETE` | `/api/v1/contacts/:id` | `204 No Content` · soft delete (requiere token) |
 
 `/health` hace un `Ping` real contra PostgreSQL: devuelve `503 Service Unavailable`
 si la base no responde.
@@ -204,6 +209,101 @@ usuario es una operación de administración.
   `APP_ENV=production`, `config.Load` falla para no firmar tokens con un secreto
   conocido.
 
+## Terceros (contactos)
+
+El módulo de terceros reutiliza las mismas capas: entidad `model.Contact`, puerto
+`repository.ContactRepository`, adaptador GORM en
+`internal/infrastructure/database/contact_repository.go`, casos de uso en
+`service.ContactService` y handlers en `internal/handler/contact*.go`. Todas las
+rutas viven en el grupo protegido, así que exigen `Authorization: Bearer <token>`.
+
+Un tercero puede ser cliente, proveedor, ambos o ninguno todavía. `name` es el
+único campo obligatorio; `is_active` se guarda como `true` por defecto. `PUT` es
+una actualización parcial: solo cambia los campos enviados.
+
+### Crear
+
+```bash
+curl -X POST http://localhost:8080/api/v1/contacts \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Panadería El Sol",
+    "business_name": "El Sol SRL",
+    "tax_id": "30-12345678-9",
+    "email": "contacto@elsol.com",
+    "phone": "1122334455",
+    "whatsapp": "1122334455",
+    "address": "Av. San Martín 123",
+    "city": "CABA",
+    "notes": "Cliente mayorista",
+    "is_client": true,
+    "is_supplier": false
+  }'
+```
+
+```json
+{
+  "id": "7a1d9f52-6c3b-4b0e-9c2a-6f1f0d8e4b21",
+  "name": "Panadería El Sol",
+  "business_name": "El Sol SRL",
+  "tax_id": "30-12345678-9",
+  "email": "contacto@elsol.com",
+  "phone": "1122334455",
+  "whatsapp": "1122334455",
+  "address": "Av. San Martín 123",
+  "city": "CABA",
+  "notes": "Cliente mayorista",
+  "is_client": true,
+  "is_supplier": false,
+  "is_active": true,
+  "created_at": "2026-10-31T12:00:00Z",
+  "updated_at": "2026-10-31T12:00:00Z"
+}
+```
+
+### Listar con filtros
+
+```bash
+# Todos los terceros (ordenados por nombre)
+curl http://localhost:8080/api/v1/contacts -H "Authorization: Bearer $TOKEN"
+
+# Solo clientes activos y que coincidan con "sol"
+curl "http://localhost:8080/api/v1/contacts?is_client=true&is_active=true&search=sol" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+`search` ignora mayúsculas y busca en nombre, razón social, CUIT/CUIL, email,
+teléfono y WhatsApp. Los filtros `is_client`, `is_supplier` e `is_active` aceptan
+`true`/`false`; cualquier otro valor responde `400`. Sin coincidencias la
+respuesta es `[]` (nunca `null`).
+
+### Obtener, actualizar y eliminar
+
+```bash
+ID=7a1d9f52-6c3b-4b0e-9c2a-6f1f0d8e4b21
+
+curl http://localhost:8080/api/v1/contacts/$ID -H "Authorization: Bearer $TOKEN"
+
+# Actualización parcial: solo cambia el teléfono y suma el rol de proveedor
+curl -X PUT http://localhost:8080/api/v1/contacts/$ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"phone": "1199998888", "is_supplier": true}'
+
+# Soft delete: responde 204 y el tercero deja de aparecer en la API
+curl -X DELETE http://localhost:8080/api/v1/contacts/$ID \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+| Situación                                     | Código | Body                                          |
+| --------------------------------------------- | ------ | --------------------------------------------- |
+| Body inválido o JSON malformado               | `400`  | `{"error":"datos inválidos: name es obligatorio"}` |
+| `name` vacío en un `PUT`                      | `400`  | `{"error":"el nombre del tercero es obligatorio"}` |
+| `:id` que no es UUID o filtro booleano inválido | `400` | `{"error":"el id debe ser un UUID válido"}`    |
+| Tercero inexistente o eliminado               | `404`  | `{"error":"tercero no encontrado"}`           |
+| Sin token o token inválido                    | `401`  | `{"error":"falta el header Authorization"}`   |
+
 ## Base de datos
 
 - **Driver:** `gorm.io/driver/postgres` (usa `pgx/v5` por debajo).
@@ -236,10 +336,11 @@ usuario es una operación de administración.
 ### Migraciones
 
 `database.AutoMigrate(db)` se ejecuta en `main` justo después de abrir la conexión:
-crea o actualiza (sin borrar datos) las tablas del dominio — hoy solo `users`, con
-su índice único de email, el índice de `deleted_at` y los defaults
-(`role = 'vendedor'`, `is_active = true`). Si falla, la app termina con código 1
-antes de aceptar peticiones.
+crea o actualiza (sin borrar datos) las tablas del dominio: `users` (índice único
+de email, índice de `deleted_at` y defaults `role = 'vendedor'`, `is_active = true`)
+y `contacts` (índice de `deleted_at`; los booleanos no llevan default en la base a
+propósito, los resuelve el service antes de insertar). Si falla, la app termina con
+código 1 antes de aceptar peticiones.
 
 `migrations/` queda reservada para las migraciones versionadas: cuando el esquema
 empiece a evolucionar en producción conviene mover el `AutoMigrate` a un
@@ -272,12 +373,15 @@ backend/
 │   ├── handler/         # Handlers HTTP: parsean request y escriben response
 │   │   ├── auth.go          # Endpoints de registro, login y perfil (/me)
 │   │   ├── auth_dto.go      # Request/response y mapeo a DTOs (sin password_hash)
+│   │   ├── contact.go       # CRUD de terceros (rutas protegidas por JWT)
+│   │   ├── contact_dto.go   # Request/response de terceros
 │   │   └── validate.go      # go-playground/validator + mensajes en español
 │   ├── infrastructure/  # Adaptadores de infraestructura (drivers, clients externos)
 │   │   ├── auth/
 │   │   │   └── jwt.go       # Firma y validación de access tokens (HS256)
 │   │   └── database/
 │   │       ├── migrate.go   # AutoMigrate de los modelos del dominio
+│   │       ├── contact_repository.go  # Implementación GORM de ContactRepository
 │   │       ├── postgres.go  # Conexión a PostgreSQL con GORM
 │   │       └── user_repository.go  # Implementación GORM de UserRepository
 │   ├── middleware/      # Middlewares (logging, recovery, CORS, auth, request ID)
@@ -285,14 +389,17 @@ backend/
 │   │   ├── context.go       # Claves de c.Locals y helpers GetUserID/Email/Role
 │   │   └── role.go          # RequireRole: autorización por rol (401/403)
 │   ├── model/           # Entidades y DTOs del dominio
-│   │   ├── errors.go        # Errores de dominio (email duplicado, credenciales…)
+│   │   ├── contact.go       # Entidad Contact (tercero), soft delete y UUID
+│   │   ├── errors.go        # Errores de dominio (email duplicado, tercero inexistente…)
 │   │   └── user.go          # Entidad User, roles y default de bcrypt/rol
 │   ├── repository/      # Contratos (puertos) de acceso a datos
-│   │   └── user_repository.go  # UserRepository (Interfaz)
+│   │   ├── contact_repository.go  # ContactRepository y filtros de búsqueda
+│   │   └── user_repository.go     # UserRepository (Interfaz)
 │   ├── router/          # Registro de grupos de rutas (/api/v1)
 │   │   └── router.go
 │   └── service/         # Lógica de negocio (orquesta repositorios)
-│       └── auth.go          # Casos de uso Register, Login y Profile
+│       ├── auth.go          # Casos de uso Register, Login y Profile
+│       └── contact.go       # Casos de uso CRUD de terceros
 ├── migrations/          # Migraciones de base de datos (versionadas)
 ├── pkg/                 # Código exportable y reutilizable por otros proyectos
 ├── scripts/             # Scripts de desarrollo, CI y despliegue

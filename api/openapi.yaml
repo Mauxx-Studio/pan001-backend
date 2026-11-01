@@ -188,6 +188,249 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/contacts:
+    post:
+      summary: Crear un tercero
+      description: |
+        Crea un cliente, un proveedor o ambos. El único campo obligatorio es
+        `name`; el resto es opcional. Si no se envían, `is_active` queda en
+        `true` e `is_client`/`is_supplier` en `false`. Los textos se guardan sin
+        espacios al inicio/fin y el email en minúsculas.
+      operationId: createContact
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateContactRequest"
+      responses:
+        "201":
+          description: Tercero creado correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: Body inválido (nombre vacío, email o largo incorrectos, JSON malformado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "datos inválidos: name es obligatorio"
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: falta el header Authorization
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Listar terceros
+      description: |
+        Devuelve los terceros no eliminados, ordenados por nombre. Los filtros son
+        opcionales y se pueden combinar; `search` busca sin distinguir mayúsculas
+        en nombre, razón social, CUIT, email, teléfono y WhatsApp.
+      operationId: listContacts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: is_client
+          in: query
+          required: false
+          description: Solo clientes (`true`) o solo los que no lo son (`false`).
+          schema:
+            type: boolean
+        - name: is_supplier
+          in: query
+          required: false
+          description: Solo proveedores (`true`) o solo los que no lo son (`false`).
+          schema:
+            type: boolean
+        - name: is_active
+          in: query
+          required: false
+          description: Solo activos (`true`) o solo desactivados (`false`).
+          schema:
+            type: boolean
+        - name: search
+          in: query
+          required: false
+          description: Texto libre para buscar en los datos principales del tercero.
+          schema:
+            type: string
+            example: panadería
+      responses:
+        "200":
+          description: Lista de terceros (vacía si no hay coincidencias).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Contact"
+        "400":
+          description: Un filtro booleano no es `true`/`false`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: is_client debe ser true o false
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/contacts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: UUID del tercero.
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Obtener un tercero
+      operationId: getContact
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tercero encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: El `id` no es un UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el id debe ser un UUID válido
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El tercero no existe o fue eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: tercero no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Actualizar un tercero
+      description: |
+        Actualización parcial: solo se modifican los campos enviados y los ausentes
+        conservan su valor. `name`, si se envía, no puede quedar vacío.
+      operationId: updateContact
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateContactRequest"
+      responses:
+        "200":
+          description: Tercero actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: Body inválido (nombre vacío, email incorrecto, JSON malformado o `id` no UUID).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el nombre del tercero es obligatorio
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El tercero no existe o fue eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: tercero no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Eliminar un tercero
+      description: Hace un soft delete (`deleted_at`); el registro deja de aparecer en la API.
+      operationId: deleteContact
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Tercero eliminado (sin body).
+        "400":
+          description: El `id` no es un UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El tercero no existe o ya estaba eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: tercero no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -285,6 +528,156 @@ components:
         updated_at:
           type: string
           format: date-time
+    Contact:
+      type: object
+      description: Tercero (cliente, proveedor o ambos) sin datos eliminados.
+      required: [id, name, is_client, is_supplier, is_active, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 7a1d9f52-6c3b-4b0e-9c2a-6f1f0d8e4b21
+        name:
+          type: string
+          maxLength: 150
+          example: Panadería El Sol
+        business_name:
+          type: string
+          maxLength: 200
+          example: El Sol SRL
+        tax_id:
+          type: string
+          maxLength: 30
+          description: CUIT/CUIL o identificador fiscal.
+          example: 30-12345678-9
+        email:
+          type: string
+          format: email
+          example: contacto@elsol.com
+        phone:
+          type: string
+          maxLength: 30
+          example: "1122334455"
+        whatsapp:
+          type: string
+          maxLength: 30
+          example: "1122334455"
+        address:
+          type: string
+          maxLength: 255
+          example: Av. San Martín 123
+        city:
+          type: string
+          maxLength: 100
+          example: CABA
+        notes:
+          type: string
+          maxLength: 2000
+          example: Cliente mayorista
+        is_client:
+          type: boolean
+          example: true
+        is_supplier:
+          type: boolean
+          example: false
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateContactRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 150
+          example: Panadería El Sol
+        business_name:
+          type: string
+          maxLength: 200
+          example: El Sol SRL
+        tax_id:
+          type: string
+          maxLength: 30
+          example: 30-12345678-9
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: contacto@elsol.com
+        phone:
+          type: string
+          maxLength: 30
+          example: "1122334455"
+        whatsapp:
+          type: string
+          maxLength: 30
+          example: "1122334455"
+        address:
+          type: string
+          maxLength: 255
+          example: Av. San Martín 123
+        city:
+          type: string
+          maxLength: 100
+          example: CABA
+        notes:
+          type: string
+          maxLength: 2000
+          example: Cliente mayorista
+        is_client:
+          type: boolean
+          default: false
+        is_supplier:
+          type: boolean
+          default: false
+        is_active:
+          type: boolean
+          default: true
+    UpdateContactRequest:
+      type: object
+      description: Todos los campos son opcionales; los ausentes no se modifican.
+      properties:
+        name:
+          type: string
+          maxLength: 150
+          description: Si se envía, no puede quedar vacío.
+        business_name:
+          type: string
+          maxLength: 200
+        tax_id:
+          type: string
+          maxLength: 30
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        phone:
+          type: string
+          maxLength: 30
+        whatsapp:
+          type: string
+          maxLength: 30
+        address:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+        is_client:
+          type: boolean
+        is_supplier:
+          type: boolean
+        is_active:
+          type: boolean
     Error:
       type: object
       required: [error]

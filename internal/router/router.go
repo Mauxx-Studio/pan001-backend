@@ -11,7 +11,8 @@ import (
 
 // Handlers agrupa los handlers que se montan en el router.
 type Handlers struct {
-	Auth *handler.AuthHandler
+	Auth     *handler.AuthHandler
+	Contacts *handler.ContactHandler
 }
 
 // Register monta todos los grupos de rutas versionadas.
@@ -23,7 +24,12 @@ type Handlers struct {
 //
 // Rutas protegidas (requieren "Authorization: Bearer <token>"):
 //
-//	GET /api/v1/auth/me
+//	GET    /api/v1/auth/me
+//	POST   /api/v1/contacts
+//	GET    /api/v1/contacts
+//	GET    /api/v1/contacts/:id
+//	PUT    /api/v1/contacts/:id
+//	DELETE /api/v1/contacts/:id
 //
 // tokens valida los access tokens; debe ser el mismo gestor que los firma en
 // login/register (auth.JWTManager) para compartir secreto y algoritmo.
@@ -39,4 +45,12 @@ func Register(app *fiber.App, handlers Handlers, tokens middleware.TokenParser) 
 	// Grupo protegido: el middleware se aplica a todo lo que se registre en él.
 	protected := api.Group("", middleware.Authenticate(tokens))
 	protected.Get("/auth/me", handlers.Auth.Me)
+
+	// Terceros (contactos): CRUD completo detrás del JWT.
+	contacts := protected.Group("/contacts")
+	contacts.Post("", handlers.Contacts.Create)
+	contacts.Get("", handlers.Contacts.List)
+	contacts.Get("/:id", handlers.Contacts.GetByID)
+	contacts.Put("/:id", handlers.Contacts.Update)
+	contacts.Delete("/:id", handlers.Contacts.Delete)
 }

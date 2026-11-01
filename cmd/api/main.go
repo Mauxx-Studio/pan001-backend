@@ -53,7 +53,7 @@ func main() {
 		closeDatabase(db)
 		log.Fatalf("no se pudieron aplicar las migraciones: %v", err)
 	}
-	log.Println("migraciones aplicadas (AutoMigrate: users)")
+	log.Println("migraciones aplicadas (AutoMigrate: users, contacts)")
 
 	if cfg.Auth.UsingDefaultSecret() {
 		log.Println("advertencia: usando el secreto JWT de desarrollo; definí JWT_SECRET para cambiarlo")
@@ -67,8 +67,16 @@ func main() {
 	authService := service.NewAuthService(userRepo, tokens)
 	authHandler := handler.NewAuthHandler(authService)
 
+	// Terceros: repositorio GORM → caso de uso → handler HTTP.
+	contactRepo := database.NewContactRepository(db)
+	contactService := service.NewContactService(contactRepo)
+	contactHandler := handler.NewContactHandler(contactService)
+
 	app := newApp(db)
-	router.Register(app, router.Handlers{Auth: authHandler}, tokens)
+	router.Register(app, router.Handlers{
+		Auth:     authHandler,
+		Contacts: contactHandler,
+	}, tokens)
 
 	// Listen bloquea, así que arrancamos el servidor en una goroutine para poder
 	// capturar las señales del sistema operativo y apagarlo de forma ordenada.

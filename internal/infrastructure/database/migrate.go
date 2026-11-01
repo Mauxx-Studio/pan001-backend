@@ -19,7 +19,7 @@ import (
 // Para producción conviene reemplazarlo por migraciones versionadas en
 // migrations/ ejecutadas desde un cmd/migrate.
 func AutoMigrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Contact{}); err != nil {
 		return fmt.Errorf("aplicando AutoMigrate: %w", err)
 	}
 	return nil
