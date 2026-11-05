@@ -29,3 +29,14 @@ var (
 	// Name es el único campo obligatorio del modelo.
 	ErrContactNameRequired = errors.New("el nombre del tercero es obligatorio")
 )
+
+// Errores de dominio del módulo de productos (products).
+var (
+	// ErrProductNotFound indica que el producto no existe o está soft-deleted.
+	ErrProductNotFound = errors.New("producto no encontrado")
+	// ErrProductNameRequired indica que el nombre del producto está vacío.
+	ErrProductNameRequired = errors.New("el nombre del producto es obligatorio")
+	// ErrProductUnitRequired indica que la unidad de medida está vacía.
+	// Name y Unit son los únicos campos obligatorios del modelo.
+	ErrProductUnitRequired = errors.New("la unidad del producto es obligatoria")
+)

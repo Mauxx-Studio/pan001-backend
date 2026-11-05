@@ -47,18 +47,23 @@ y cierra el pool de conexiones de PostgreSQL antes de terminar.
 
 ### Endpoints
 
-| Método | Ruta                    | Respuesta                                        |
-| ------ | ----------------------- | ------------------------------------------------ |
-| `GET`  | `/`                     | `200 OK` · `{"message":"Hola mundo con Fiber"}`  |
-| `GET`  | `/health`               | `200 OK` · `{"database":"up","status":"ok"}`     |
-| `POST` | `/api/v1/auth/register` | `201 Created` · datos del usuario + token        |
-| `POST` | `/api/v1/auth/login`    | `200 OK` · datos del usuario + token             |
-| `GET`  | `/api/v1/auth/me`       | `200 OK` · usuario autenticado (requiere token)  |
-| `POST` | `/api/v1/contacts`      | `201 Created` · tercero creado (requiere token)  |
-| `GET`  | `/api/v1/contacts`      | `200 OK` · lista de terceros con filtros         |
-| `GET`  | `/api/v1/contacts/:id`  | `200 OK` · tercero (requiere token)              |
-| `PUT`  | `/api/v1/contacts/:id`  | `200 OK` · tercero actualizado (requiere token)  |
-| `DELETE` | `/api/v1/contacts/:id` | `204 No Content` · soft delete (requiere token) |
+| Método   | Ruta                    | Respuesta                                        |
+| -------- | ----------------------- | ------------------------------------------------ |
+| `GET`    | `/`                     | `200 OK` · `{"message":"Hola mundo con Fiber"}`  |
+| `GET`    | `/health`               | `200 OK` · `{"database":"up","status":"ok"}`     |
+| `POST`   | `/api/v1/auth/register` | `201 Created` · datos del usuario + token        |
+| `POST`   | `/api/v1/auth/login`    | `200 OK` · datos del usuario + token             |
+| `GET`    | `/api/v1/auth/me`       | `200 OK` · usuario autenticado (requiere token)  |
+| `POST`   | `/api/v1/contacts`      | `201 Created` · tercero creado (requiere token)  |
+| `GET`    | `/api/v1/contacts`      | `200 OK` · lista de terceros con filtros         |
+| `GET`    | `/api/v1/contacts/:id`  | `200 OK` · tercero (requiere token)              |
+| `PUT`    | `/api/v1/contacts/:id`  | `200 OK` · tercero actualizado (requiere token)  |
+| `DELETE` | `/api/v1/contacts/:id`  | `204 No Content` · soft delete (requiere token)  |
+| `POST`   | `/api/v1/products`      | `201 Created` · producto creado (requiere token) |
+| `GET`    | `/api/v1/products`      | `200 OK` · lista de productos con filtros        |
+| `GET`    | `/api/v1/products/:id`  | `200 OK` · producto (requiere token)             |
+| `PUT`    | `/api/v1/products/:id`  | `200 OK` · producto actualizado (requiere token) |
+| `DELETE` | `/api/v1/products/:id`  | `204 No Content` · soft delete (requiere token)  |
 
 `/health` hace un `Ping` real contra PostgreSQL: devuelve `503 Service Unavailable`
 si la base no responde.
@@ -304,6 +309,118 @@ curl -X DELETE http://localhost:8080/api/v1/contacts/$ID \
 | Tercero inexistente o eliminado               | `404`  | `{"error":"tercero no encontrado"}`           |
 | Sin token o token inválido                    | `401`  | `{"error":"falta el header Authorization"}`   |
 
+## Productos (catálogo)
+
+Misma estructura de capas: entidad `model.Product`, puerto
+`repository.ProductRepository`, adaptador GORM en
+`internal/infrastructure/database/product_repository.go`, casos de uso en
+`service.ProductService` y handlers en `internal/handler/product*.go`. Todas las
+rutas viven en el grupo protegido, así que exigen
+`Authorization: Bearer <token>`.
+
+Una sola tabla cubre productos terminados, insumos y empaques: el mismo ítem
+puede venderse, comprarse y/o producirse según sus flags (`is_sold`,
+`is_purchased`, `is_produced`), que se combinan libremente y por defecto son
+`false`. Solo `name` y `unit` son obligatorios; `track_stock` e `is_active`
+arrancan en `true` (los resuelve el service, nunca la base). El stock y los
+importes usan `github.com/shopspring/decimal` sobre columnas `numeric` de
+PostgreSQL y se devuelven como números JSON con los dígitos exactos
+(`current_stock`, `min_stock`: `numeric(14,3)`; `sale_price`, `cost`:
+`numeric(14,2)`). `PUT` es una actualización parcial: solo cambia los campos
+enviados.
+
+### Crear
+
+```bash
+curl -X POST http://localhost:8080/api/v1/products \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Pan francés",
+    "sku": "PAN-001",
+    "description": "Pan francés clásico",
+    "unit": "unidad",
+    "is_sold": true,
+    "is_purchased": false,
+    "is_produced": true,
+    "track_stock": true,
+    "current_stock": 0,
+    "min_stock": 20,
+    "sale_price": 500,
+    "cost": 180
+  }'
+```
+
+```json
+{
+  "id": "0f0b6d3e-5b1a-4c8e-9f6a-2d7c1b9e4a10",
+  "name": "Pan francés",
+  "sku": "PAN-001",
+  "description": "Pan francés clásico",
+  "unit": "unidad",
+  "is_sold": true,
+  "is_purchased": false,
+  "is_produced": true,
+  "track_stock": true,
+  "current_stock": 0,
+  "min_stock": 20,
+  "sale_price": 500,
+  "cost": 180,
+  "is_active": true,
+  "created_at": "2026-11-01T09:00:00Z",
+  "updated_at": "2026-11-01T09:00:00Z"
+}
+```
+
+### Listar con filtros
+
+```bash
+# Todos los productos (ordenados por nombre)
+curl http://localhost:8080/api/v1/products -H "Authorization: Bearer $TOKEN"
+
+# Solo lo que se produce y coincide con "pan"
+curl "http://localhost:8080/api/v1/products?is_produced=true&search=pan" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Insumos que se compran y no se venden
+curl "http://localhost:8080/api/v1/products?is_purchased=true&is_sold=false" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+`search` ignora mayúsculas y busca en nombre, SKU y descripción. Los filtros
+`is_sold`, `is_purchased`, `is_produced`, `is_active` y `track_stock` aceptan
+`true`/`false`; cualquier otro valor responde `400`. Sin coincidencias la
+respuesta es `[]` (nunca `null`).
+
+### Obtener, actualizar y eliminar
+
+```bash
+ID=0f0b6d3e-5b1a-4c8e-9f6a-2d7c1b9e4a10
+
+curl http://localhost:8080/api/v1/products/$ID -H "Authorization: Bearer $TOKEN"
+
+# Actualización parcial: solo cambia el precio de venta y el stock mínimo
+curl -X PUT http://localhost:8080/api/v1/products/$ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"sale_price": "550.75", "min_stock": "25"}'
+
+# Soft delete: responde 204 y el producto deja de aparecer en la API
+curl -X DELETE http://localhost:8080/api/v1/products/$ID \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Los decimales se aceptan tanto como número (`500`) como cadena (`"500.00"`) y se
+devuelven siempre con los dígitos guardados en la base.
+
+| Situación                                         | Código | Body                                                  |
+| ------------------------------------------------- | ------ | ----------------------------------------------------- |
+| Body inválido o JSON malformado                    | `400`  | `{"error":"datos inválidos: name es obligatorio"}`     |
+| `name` o `unit` vacíos en un `PUT`                 | `400`  | `{"error":"la unidad del producto es obligatoria"}`    |
+| `:id` que no es UUID o filtro booleano inválido    | `400`  | `{"error":"el id debe ser un UUID válido"}`            |
+| Producto inexistente o eliminado                   | `404`  | `{"error":"producto no encontrado"}`                   |
+| Sin token o token inválido                         | `401`  | `{"error":"falta el header Authorization"}`            |
+
 ## Base de datos
 
 - **Driver:** `gorm.io/driver/postgres` (usa `pgx/v5` por debajo).
@@ -337,9 +454,11 @@ curl -X DELETE http://localhost:8080/api/v1/contacts/$ID \
 
 `database.AutoMigrate(db)` se ejecuta en `main` justo después de abrir la conexión:
 crea o actualiza (sin borrar datos) las tablas del dominio: `users` (índice único
-de email, índice de `deleted_at` y defaults `role = 'vendedor'`, `is_active = true`)
-y `contacts` (índice de `deleted_at`; los booleanos no llevan default en la base a
-propósito, los resuelve el service antes de insertar). Si falla, la app termina con
+de email, índice de `deleted_at` y defaults `role = 'vendedor'`, `is_active = true`),
+`contacts` y `products` (ambas con índice de `deleted_at`; los booleanos no llevan
+default en la base a propósito, los resuelve el service antes de insertar). En
+`products` el stock se guarda en `numeric(14,3)` y los importes en
+`numeric(14,2)`, mapeados a `decimal.Decimal`. Si falla, la app termina con
 código 1 antes de aceptar peticiones.
 
 `migrations/` queda reservada para las migraciones versionadas: cuando el esquema
@@ -375,6 +494,8 @@ backend/
 │   │   ├── auth_dto.go      # Request/response y mapeo a DTOs (sin password_hash)
 │   │   ├── contact.go       # CRUD de terceros (rutas protegidas por JWT)
 │   │   ├── contact_dto.go   # Request/response de terceros
+│   │   ├── product.go       # CRUD del catálogo de productos (rutas protegidas por JWT)
+│   │   ├── product_dto.go   # Request/response de productos (decimales como números JSON)
 │   │   └── validate.go      # go-playground/validator + mensajes en español
 │   ├── infrastructure/  # Adaptadores de infraestructura (drivers, clients externos)
 │   │   ├── auth/
@@ -383,6 +504,7 @@ backend/
 │   │       ├── migrate.go   # AutoMigrate de los modelos del dominio
 │   │       ├── contact_repository.go  # Implementación GORM de ContactRepository
 │   │       ├── postgres.go  # Conexión a PostgreSQL con GORM
+│   │       ├── product_repository.go  # Implementación GORM de ProductRepository
 │   │       └── user_repository.go  # Implementación GORM de UserRepository
 │   ├── middleware/      # Middlewares (logging, recovery, CORS, auth, request ID)
 │   │   ├── auth.go          # Authenticate: valida el Bearer token y publica la identidad
@@ -391,15 +513,18 @@ backend/
 │   ├── model/           # Entidades y DTOs del dominio
 │   │   ├── contact.go       # Entidad Contact (tercero), soft delete y UUID
 │   │   ├── errors.go        # Errores de dominio (email duplicado, tercero inexistente…)
+│   │   ├── product.go       # Entidad Product (flags, decimales, soft delete y UUID)
 │   │   └── user.go          # Entidad User, roles y default de bcrypt/rol
 │   ├── repository/      # Contratos (puertos) de acceso a datos
 │   │   ├── contact_repository.go  # ContactRepository y filtros de búsqueda
+│   │   ├── product_repository.go  # ProductRepository y filtros del catálogo
 │   │   └── user_repository.go     # UserRepository (Interfaz)
 │   ├── router/          # Registro de grupos de rutas (/api/v1)
 │   │   └── router.go
 │   └── service/         # Lógica de negocio (orquesta repositorios)
 │       ├── auth.go          # Casos de uso Register, Login y Profile
-│       └── contact.go       # Casos de uso CRUD de terceros
+│       ├── contact.go       # Casos de uso CRUD de terceros
+│       └── product.go       # Casos de uso CRUD del catálogo y reglas de stock
 ├── migrations/          # Migraciones de base de datos (versionadas)
 ├── pkg/                 # Código exportable y reutilizable por otros proyectos
 ├── scripts/             # Scripts de desarrollo, CI y despliegue

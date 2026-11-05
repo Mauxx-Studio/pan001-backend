@@ -13,6 +13,7 @@ import (
 type Handlers struct {
 	Auth     *handler.AuthHandler
 	Contacts *handler.ContactHandler
+	Products *handler.ProductHandler
 }
 
 // Register monta todos los grupos de rutas versionadas.
@@ -30,6 +31,11 @@ type Handlers struct {
 //	GET    /api/v1/contacts/:id
 //	PUT    /api/v1/contacts/:id
 //	DELETE /api/v1/contacts/:id
+//	POST   /api/v1/products
+//	GET    /api/v1/products
+//	GET    /api/v1/products/:id
+//	PUT    /api/v1/products/:id
+//	DELETE /api/v1/products/:id
 //
 // tokens valida los access tokens; debe ser el mismo gestor que los firma en
 // login/register (auth.JWTManager) para compartir secreto y algoritmo.
@@ -53,4 +59,12 @@ func Register(app *fiber.App, handlers Handlers, tokens middleware.TokenParser) 
 	contacts.Get("/:id", handlers.Contacts.GetByID)
 	contacts.Put("/:id", handlers.Contacts.Update)
 	contacts.Delete("/:id", handlers.Contacts.Delete)
+
+	// Productos (catálogo): CRUD completo detrás del JWT.
+	products := protected.Group("/products")
+	products.Post("", handlers.Products.Create)
+	products.Get("", handlers.Products.List)
+	products.Get("/:id", handlers.Products.GetByID)
+	products.Put("/:id", handlers.Products.Update)
+	products.Delete("/:id", handlers.Products.Delete)
 }

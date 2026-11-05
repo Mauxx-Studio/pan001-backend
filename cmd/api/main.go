@@ -53,7 +53,7 @@ func main() {
 		closeDatabase(db)
 		log.Fatalf("no se pudieron aplicar las migraciones: %v", err)
 	}
-	log.Println("migraciones aplicadas (AutoMigrate: users, contacts)")
+	log.Println("migraciones aplicadas (AutoMigrate: users, contacts, products)")
 
 	if cfg.Auth.UsingDefaultSecret() {
 		log.Println("advertencia: usando el secreto JWT de desarrollo; definí JWT_SECRET para cambiarlo")
@@ -72,10 +72,16 @@ func main() {
 	contactService := service.NewContactService(contactRepo)
 	contactHandler := handler.NewContactHandler(contactService)
 
+	// Productos (catálogo): repositorio GORM → caso de uso → handler HTTP.
+	productRepo := database.NewProductRepository(db)
+	productService := service.NewProductService(productRepo)
+	productHandler := handler.NewProductHandler(productService)
+
 	app := newApp(db)
 	router.Register(app, router.Handlers{
 		Auth:     authHandler,
 		Contacts: contactHandler,
+		Products: productHandler,
 	}, tokens)
 
 	// Listen bloquea, así que arrancamos el servidor en una goroutine para poder

@@ -31,6 +31,19 @@ var fieldLabels = map[string]string{
 	"IsClient":     "is_client",
 	"IsSupplier":   "is_supplier",
 	"IsActive":     "is_active",
+
+	// Campos del módulo de productos (products).
+	"SKU":          "sku",
+	"Description":  "description",
+	"Unit":         "unit",
+	"IsSold":       "is_sold",
+	"IsPurchased":  "is_purchased",
+	"IsProduced":   "is_produced",
+	"TrackStock":   "track_stock",
+	"CurrentStock": "current_stock",
+	"MinStock":     "min_stock",
+	"SalePrice":    "sale_price",
+	"Cost":         "cost",
 }
 
 // newValidator crea el validador con las reglas propias del dominio.
