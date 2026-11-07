@@ -11,7 +11,7 @@ func resetEnv(t *testing.T) {
 	t.Helper()
 
 	for _, key := range []string{
-		"PORT", "APP_ENV", "JWT_SECRET",
+		"PORT", "APP_ENV", "JWT_SECRET", "CORS_ALLOWED_ORIGINS",
 		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSLMODE",
 	} {
 		t.Setenv(key, "")
@@ -36,6 +36,10 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if !cfg.App.IsDevelopment() {
 		t.Error("IsDevelopment() = false, se esperaba true con APP_ENV por defecto")
+	}
+	// Sin CORS_ALLOWED_ORIGINS se permite cualquier origen.
+	if len(cfg.App.AllowedOrigins) != 1 || cfg.App.AllowedOrigins[0] != defaultCORSAllowedOrigins {
+		t.Errorf("App.AllowedOrigins = %v, se esperaba [%q]", cfg.App.AllowedOrigins, defaultCORSAllowedOrigins)
 	}
 
 	// En desarrollo, si no se define JWT_SECRET se usa el secreto de desarrollo.
@@ -82,6 +86,30 @@ func TestLoadLeeVariablesDeEntorno(t *testing.T) {
 	wantDSN := "host=db.interno port=6543 user=pan001 password=secreto dbname=pan001_db sslmode=require"
 	if got := cfg.Database.DSN(); got != wantDSN {
 		t.Errorf("DSN() = %q, se esperaba %q", got, wantDSN)
+	}
+}
+
+func TestLoadCORSOrigins(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("DB_USER", "mauri")
+	t.Setenv("DB_NAME", "miapp")
+	// Lista separada por comas con espacios y un elemento vacío: se recortan y
+	// se descartan los vacíos.
+	t.Setenv("CORS_ALLOWED_ORIGINS", " https://app.pan001.com , ,https://admin.pan001.com ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() devolvió un error inesperado: %v", err)
+	}
+
+	want := []string{"https://app.pan001.com", "https://admin.pan001.com"}
+	if len(cfg.App.AllowedOrigins) != len(want) {
+		t.Fatalf("App.AllowedOrigins = %v, se esperaba %v", cfg.App.AllowedOrigins, want)
+	}
+	for i := range want {
+		if cfg.App.AllowedOrigins[i] != want[i] {
+			t.Errorf("App.AllowedOrigins[%d] = %q, se esperaba %q", i, cfg.App.AllowedOrigins[i], want[i])
+		}
 	}
 }
 

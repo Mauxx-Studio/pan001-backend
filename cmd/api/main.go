@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
 	"gorm.io/gorm"
 
 	"github.com/pan001/backend/internal/config"
@@ -77,7 +78,7 @@ func main() {
 	productService := service.NewProductService(productRepo)
 	productHandler := handler.NewProductHandler(productService)
 
-	app := newApp(db)
+	app := newApp(db, cfg)
 	router.Register(app, router.Handlers{
 		Auth:     authHandler,
 		Contacts: contactHandler,
@@ -123,12 +124,13 @@ func main() {
 	log.Println("servidor detenido correctamente")
 }
 
-// newApp construye la aplicación Fiber con su configuración y las rutas que no
-// dependen de la base de datos.
+// newApp construye la aplicación Fiber con su configuración, el middleware CORS
+// y las rutas que no dependen de la base de datos.
 //
 // La conexión se recibe para el health check; los grupos de rutas del dominio
-// se montan en main con router.Register una vez armado el wiring.
-func newApp(db *gorm.DB) *fiber.App {
+// se montan en main con router.Register una vez armado el wiring. La cfg aporta
+// los orígenes autorizados para CORS.
+func newApp(db *gorm.DB, cfg *config.Config) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "pan001 backend",
 		ReadTimeout:  10 * time.Second,
@@ -136,6 +138,29 @@ func newApp(db *gorm.DB) *fiber.App {
 		IdleTimeout:  60 * time.Second,
 		ErrorHandler: errorHandler,
 	})
+
+	// CORS se monta antes que las rutas y que los middlewares de dominio. Así
+	// las peticiones preflight (OPTIONS) se responden desde aquí (204) y nunca
+	// llegan al middleware de autenticación, que las rechazaría por no llevar
+	// header Authorization.
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: cfg.App.AllowedOrigins,
+		AllowMethods: []string{
+			fiber.MethodGet,
+			fiber.MethodPost,
+			fiber.MethodPut,
+			fiber.MethodPatch,
+			fiber.MethodDelete,
+			fiber.MethodHead,
+			fiber.MethodOptions,
+		},
+		AllowHeaders: []string{
+			fiber.HeaderOrigin,
+			fiber.HeaderContentType,
+			fiber.HeaderAccept,
+			fiber.HeaderAuthorization,
+		},
+	}))
 
 	app.Get("/", hello)
 	app.Get("/health", health(db))

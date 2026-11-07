@@ -36,6 +36,13 @@ const (
 	defaultDBPort = "5432"
 	// defaultDBSSLMode es el modo SSL usado por defecto (desarrollo local).
 	defaultDBSSLMode = "disable"
+
+	// envCORSAllowedOrigins es la variable con los orígenes autorizados a
+	// consumir la API vía CORS, separados por comas.
+	envCORSAllowedOrigins = "CORS_ALLOWED_ORIGINS"
+	// defaultCORSAllowedOrigins permite cualquier origen cuando la variable no
+	// está definida (cómodo en desarrollo; en producción conviene restringirlo).
+	defaultCORSAllowedOrigins = "*"
 )
 
 // Config agrupa toda la configuración de la aplicación.
@@ -51,6 +58,9 @@ type App struct {
 	Port string
 	// Env es el entorno de ejecución: development | staging | production.
 	Env string
+	// AllowedOrigins es la lista de orígenes autorizados a consumir la API vía
+	// CORS. El valor especial "*" habilita cualquier origen.
+	AllowedOrigins []string
 }
 
 // IsDevelopment indica si la aplicación corre en desarrollo local.
@@ -109,8 +119,9 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		App: App{
-			Port: envOr("PORT", defaultPort),
-			Env:  envOr("APP_ENV", defaultAppEnv),
+			Port:           envOr("PORT", defaultPort),
+			Env:            envOr("APP_ENV", defaultAppEnv),
+			AllowedOrigins: envList(envCORSAllowedOrigins, defaultCORSAllowedOrigins),
 		},
 		Database: Database{
 			Host:     envOr("DB_HOST", defaultDBHost),
@@ -170,6 +181,23 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// envList devuelve la variable key como una lista de valores separados por
+// comas. Si la variable está vacía usa fallback. Se recortan los espacios de
+// cada valor y se descartan los vacíos, de modo que "a, ,b" produce ["a","b"].
+func envList(key, fallback string) []string {
+	raw := envOr(key, fallback)
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+
+	return values
 }
 
 // envInt devuelve el valor de la variable key convertido a entero.
