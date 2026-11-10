@@ -64,6 +64,11 @@ y cierra el pool de conexiones de PostgreSQL antes de terminar.
 | `GET`    | `/api/v1/products/:id`  | `200 OK` · producto (requiere token)             |
 | `PUT`    | `/api/v1/products/:id`  | `200 OK` · producto actualizado (requiere token) |
 | `DELETE` | `/api/v1/products/:id`  | `204 No Content` · soft delete (requiere token)  |
+| `POST`   | `/api/v1/orders`        | `201 Created` · pedido con líneas (requiere token) |
+| `GET`    | `/api/v1/orders`        | `200 OK` · lista de pedidos con filtros          |
+| `GET`    | `/api/v1/orders/:id`    | `200 OK` · pedido con líneas (requiere token)    |
+| `PUT`    | `/api/v1/orders/:id`    | `200 OK` · pedido actualizado (requiere token)   |
+| `DELETE` | `/api/v1/orders/:id`    | `204 No Content` · soft delete (requiere token)  |
 
 `/health` hace un `Ping` real contra PostgreSQL: devuelve `503 Service Unavailable`
 si la base no responde.
@@ -421,6 +426,194 @@ devuelven siempre con los dígitos guardados en la base.
 | Producto inexistente o eliminado                   | `404`  | `{"error":"producto no encontrado"}`                   |
 | Sin token o token inválido                         | `401`  | `{"error":"falta el header Authorization"}`            |
 
+## Pedidos (ventas)
+
+Misma estructura de capas: entidades `model.Order` y `model.OrderItem`, puerto
+`repository.OrderRepository`, adaptador GORM en
+`internal/infrastructure/database/order_repository.go`, casos de uso en
+`service.OrderService` y handlers en `internal/handler/order*.go`. Todas las
+rutas viven en el grupo protegido, así que exigen
+`Authorization: Bearer <token>`.
+
+Un pedido es una **cabecera** (`orders`) más sus **líneas** (`order_items`). El
+único campo obligatorio es `contact_id` (el tercero tiene que existir) y, cuando
+el pedido no es borrador, al menos una línea. Los importes usan
+`github.com/shopspring/decimal` sobre `numeric(14,2)` y las cantidades sobre
+`numeric(14,3)`; se devuelven como números JSON con los dígitos exactos.
+
+Reglas que aplica el service:
+
+- **Código interno:** `PED-YYYYMMDD-XXXX` (secuencia diaria en UTC con ceros a la
+  izquierda). Se asigna dentro de la transacción y se reintenta hasta 5 veces si
+  choca con el índice único; si no lo logra responde `409`.
+- **Totales calculados:** `line_total = quantity × unit_price` redondeado a 2
+  decimales, `subtotal` es la suma de las líneas y
+  `final_amount = subtotal − discount_amount`. El descuento no puede ser negativo
+  ni mayor que el subtotal.
+- **Precio y snapshot:** el precio **no** se recibe del cliente: sale del
+  `sale_price` del catálogo (tiene que ser mayor que cero) y, junto con
+  `product_name` y `unit`, queda congelado en la línea. Editar el producto
+  después no cambia el pedido.
+- **Estados:** `status` nace `confirmed` (o `draft` si se pide) y
+  `payment_status` nace `pending`. `delivery_type`, `payment_method` y
+  `payment_status` son opcionales y se validan contra las constantes del dominio.
+- **Entregas parciales:** `quantity_delivered` (en las líneas) y
+  `parent_order_id` (en la cabecera) ya existen en el esquema, pero la API todavía
+  no los escribe: quedan preparados para registrar entregas parciales sin migrar
+  tablas.
+
+### Crear
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "contact_id": "3d2b1a54-8f0e-4c1a-9b7d-6a5c4e3d2b10",
+    "delivery_type": "delivery",
+    "delivery_at": "2026-11-02",
+    "payment_method": "cash",
+    "discount_amount": "50.00",
+    "notes": "entregar antes de las 9",
+    "items": [
+      {"product_id": "0f0b6d3e-5b1a-4c8e-9f6a-2d7c1b9e4a10", "quantity": 12},
+      {"product_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "quantity": 2.5, "notes": "cortado fino"}
+    ]
+  }'
+```
+
+```json
+{
+  "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "code": "PED-20261101-0001",
+  "contact_id": "3d2b1a54-8f0e-4c1a-9b7d-6a5c4e3d2b10",
+  "status": "confirmed",
+  "ordered_at": "2026-11-01T09:00:00Z",
+  "delivery_at": "2026-11-02T00:00:00Z",
+  "delivery_type": "delivery",
+  "subtotal": 8500,
+  "discount_amount": 50,
+  "final_amount": 8450,
+  "payment_method": "cash",
+  "payment_status": "pending",
+  "amount_paid": 0,
+  "notes": "entregar antes de las 9",
+  "is_active": true,
+  "created_at": "2026-11-01T09:00:00Z",
+  "updated_at": "2026-11-01T09:00:00Z",
+  "items": [
+    {
+      "id": "5b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "product_id": "0f0b6d3e-5b1a-4c8e-9f6a-2d7c1b9e4a10",
+      "product_name": "Pan francés",
+      "unit": "unidad",
+      "quantity": 12,
+      "quantity_delivered": 0,
+      "unit_price": 500,
+      "line_total": 6000,
+      "created_at": "2026-11-01T09:00:00Z",
+      "updated_at": "2026-11-01T09:00:00Z"
+    },
+    {
+      "id": "b2c3d4e5-f6a1-4b2c-9d3e-4f5a6b7c8d9e",
+      "product_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "product_name": "Pan de campo",
+      "unit": "kg",
+      "quantity": 2.5,
+      "quantity_delivered": 0,
+      "unit_price": 1000,
+      "line_total": 2500,
+      "notes": "cortado fino",
+      "created_at": "2026-11-01T09:00:00Z",
+      "updated_at": "2026-11-01T09:00:00Z"
+    }
+  ]
+}
+```
+
+Un pedido en `draft` puede crearse sin líneas. `delivery_at` acepta
+`2026-11-02` (medianoche UTC) o un RFC3339 completo.
+
+### Listar con filtros
+
+```bash
+# Todos los pedidos (más recientes primero, sin líneas)
+curl http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN"
+
+# Los de un cliente en un rango de fechas
+curl "http://localhost:8080/api/v1/orders?contact_id=$CONTACT_ID&from=2026-11-01&to=2026-11-30" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Pendientes de entrega que mencionan "mostrador"
+curl "http://localhost:8080/api/v1/orders?status=confirmed&search=mostrador" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+`from` y `to` acotan `ordered_at` y son inclusivos: un `to` sin hora cubre el día
+completo (`23:59:59.999999999`). `search` ignora mayúsculas y busca en el código,
+las notas y el nombre del tercero. `status` y `payment_status` se validan contra
+las constantes del dominio. Sin coincidencias la respuesta es `[]` (nunca
+`null`), y el listado devuelve solo cabeceras, sin `items`.
+
+### Obtener, actualizar y eliminar
+
+```bash
+ID=7c9e6679-7425-40de-944b-e07fc1f90ae7
+
+# Detalle con líneas
+curl http://localhost:8080/api/v1/orders/$ID -H "Authorization: Bearer $TOKEN"
+
+# Actualización parcial de la cabecera: solo cambia lo enviado
+curl -X PUT http://localhost:8080/api/v1/orders/$ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"payment_status": "partial", "amount_paid": "4000.00", "delivery_at": "2026-11-03T09:00:00Z"}'
+
+# Reemplazo de líneas: se conserva la que lleva id y se agrega la que no lo lleva
+curl -X PUT http://localhost:8080/api/v1/orders/$ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "items": [
+      {"id": "5b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "quantity": 15},
+      {"product_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "quantity": 4}
+    ]
+  }'
+
+# Soft delete de la cabecera y sus líneas: responde 204
+curl -X DELETE http://localhost:8080/api/v1/orders/$ID \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+En un `PUT`, `items` **ausente** deja las líneas como están; `items` **presente**
+(aunque sea `[]`) define el conjunto final: las líneas que no aparecen se borran
+lógicamente. Una línea con `id` modifica la existente (`quantity`, `product_id`,
+`notes`) y otra sin `id` agrega una nueva. Las líneas con `quantity_delivered > 0`
+no se pueden quitar y su cantidad no puede quedar por debajo de lo entregado;
+además, un pedido que no es borrador no puede quedarse sin líneas. Enviar
+`delivery_at` o `notes` vacíos limpia el campo.
+
+| Situación                                                     | Código | Body                                                                                    |
+| ------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
+| Body inválido, JSON malformado o `contact_id` sin UUID         | `400`  | `{"error":"datos inválidos: contact_id es obligatorio"}`                                  |
+| `id` de la ruta sin UUID (GET/PUT/DELETE)                      | `400`  | `{"error":"datos inválidos: id debe ser un UUID válido"}`                                 |
+| Tercero inexistente                                            | `400`  | `{"error":"el tercero indicado no existe"}`                                              |
+| Producto inexistente                                           | `400`  | `{"error":"el producto indicado no existe"}`                                             |
+| Pedido sin líneas y sin ser borrador                           | `400`  | `{"error":"el pedido debe tener al menos un ítem"}`                                      |
+| Descuento negativo o mayor que el subtotal                     | `400`  | `{"error":"el descuento no puede ser negativo ni superar el subtotal del pedido"}`       |
+| Importe cobrado negativo                                       | `400`  | `{"error":"el importe cobrado no puede ser negativo"}`                                   |
+| Estado, tipo de entrega, medio o estado de pago inválido        | `400`  | `{"error":"el estado del pedido no es válido"}`                                          |
+| Cantidad nula, negativa o menor a lo ya entregado              | `400`  | `{"error":"la cantidad del ítem debe ser mayor que cero y no menor a lo ya entregado"}`  |
+| Producto sin precio de venta                                   | `400`  | `{"error":"el producto no tiene un precio de venta válido"}`                             |
+| Línea con `id` que no pertenece al pedido                      | `400`  | `{"error":"el ítem indicado no pertenece al pedido"}`                                    |
+| Línea repetida en el body                                      | `400`  | `{"error":"el ítem aparece más de una vez en el pedido"}`                                |
+| Línea entregada que se intenta quitar                          | `400`  | `{"error":"no se puede quitar un ítem con cantidad entregada"}`                          |
+| Filtro `from`/`to` con formato inválido                        | `400`  | `{"error":"from debe ser una fecha ISO 8601 (por ejemplo 2025-03-01 o 2025-03-01T15:04:05Z)"}` |
+| Pedido inexistente o eliminado                                 | `404`  | `{"error":"pedido no encontrado"}`                                                       |
+| No se pudo generar el código en 5 intentos                     | `409`  | `{"error":"no se pudo generar el código del pedido, intente de nuevo"}`                   |
+| Sin header `Authorization`                                     | `401`  | `{"error":"falta el header Authorization"}`                                              |
+| Token inválido o expirado                                      | `401`  | `{"error":"token inválido o expirado"}`                                                  |
+
 ## Base de datos
 
 - **Driver:** `gorm.io/driver/postgres` (usa `pgx/v5` por debajo).
@@ -458,8 +651,11 @@ de email, índice de `deleted_at` y defaults `role = 'vendedor'`, `is_active = t
 `contacts` y `products` (ambas con índice de `deleted_at`; los booleanos no llevan
 default en la base a propósito, los resuelve el service antes de insertar). En
 `products` el stock se guarda en `numeric(14,3)` y los importes en
-`numeric(14,2)`, mapeados a `decimal.Decimal`. Si falla, la app termina con
-código 1 antes de aceptar peticiones.
+`numeric(14,2)`, mapeados a `decimal.Decimal`. En `orders`/`order_items` la
+cabecera tiene índice único en `code` y las líneas guardan `order_id` y
+`product_id`; la clave foránea contra `products` usa `ON DELETE RESTRICT`, así que
+no se puede borrar un producto que ya está en un pedido. Si falla, la app termina
+con código 1 antes de aceptar peticiones.
 
 `migrations/` queda reservada para las migraciones versionadas: cuando el esquema
 empiece a evolucionar en producción conviene mover el `AutoMigrate` a un
@@ -496,6 +692,8 @@ backend/
 │   │   ├── contact_dto.go   # Request/response de terceros
 │   │   ├── product.go       # CRUD del catálogo de productos (rutas protegidas por JWT)
 │   │   ├── product_dto.go   # Request/response de productos (decimales como números JSON)
+│   │   ├── order.go         # CRUD de pedidos (cabecera + líneas, rutas protegidas por JWT)
+│   │   ├── order_dto.go     # Request/response de pedidos y parseo de fechas/importes
 │   │   └── validate.go      # go-playground/validator + mensajes en español
 │   ├── infrastructure/  # Adaptadores de infraestructura (drivers, clients externos)
 │   │   ├── auth/
@@ -503,6 +701,7 @@ backend/
 │   │   └── database/
 │   │       ├── migrate.go   # AutoMigrate de los modelos del dominio
 │   │       ├── contact_repository.go  # Implementación GORM de ContactRepository
+│   │       ├── order_repository.go  # Implementación GORM de OrderRepository (transacciones)
 │   │       ├── postgres.go  # Conexión a PostgreSQL con GORM
 │   │       ├── product_repository.go  # Implementación GORM de ProductRepository
 │   │       └── user_repository.go  # Implementación GORM de UserRepository
@@ -513,10 +712,12 @@ backend/
 │   ├── model/           # Entidades y DTOs del dominio
 │   │   ├── contact.go       # Entidad Contact (tercero), soft delete y UUID
 │   │   ├── errors.go        # Errores de dominio (email duplicado, tercero inexistente…)
+│   │   ├── order.go         # Entidades Order/OrderItem, estados y código PED-YYYYMMDD-XXXX
 │   │   ├── product.go       # Entidad Product (flags, decimales, soft delete y UUID)
 │   │   └── user.go          # Entidad User, roles y default de bcrypt/rol
 │   ├── repository/      # Contratos (puertos) de acceso a datos
 │   │   ├── contact_repository.go  # ContactRepository y filtros de búsqueda
+│   │   ├── order_repository.go    # OrderRepository (cabecera, líneas y transacciones)
 │   │   ├── product_repository.go  # ProductRepository y filtros del catálogo
 │   │   └── user_repository.go     # UserRepository (Interfaz)
 │   ├── router/          # Registro de grupos de rutas (/api/v1)
@@ -524,6 +725,7 @@ backend/
 │   └── service/         # Lógica de negocio (orquesta repositorios)
 │       ├── auth.go          # Casos de uso Register, Login y Profile
 │       ├── contact.go       # Casos de uso CRUD de terceros
+│       ├── order.go         # Casos de uso de pedidos: totales, códigos y líneas
 │       └── product.go       # Casos de uso CRUD del catálogo y reglas de stock
 ├── migrations/          # Migraciones de base de datos (versionadas)
 ├── pkg/                 # Código exportable y reutilizable por otros proyectos
@@ -582,3 +784,4 @@ memoria, como hace `internal/service/auth_test.go`.
 3. Mover `AutoMigrate` a un `cmd/migrate` con migraciones versionadas en `migrations/`.
 4. Mover los handlers de ejemplo (`hello`, `health`) a `internal/handler` y añadir logging/recovery/CORS en `internal/middleware`.
 5. Añadir `golangci-lint`, un `Dockerfile` multi-stage y CI (GitHub Actions).
+6. Registrar entregas parciales sobre `order_items.quantity_delivered` (el esquema ya lo soporta, ver más arriba) y descontar stock al confirmar el pedido.

@@ -431,6 +431,617 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/products:
+    post:
+      summary: Crear un producto del catálogo
+      description: |
+        Da de alta un producto terminado, un insumo o un empaque: los tres
+        comparten la misma tabla y se distinguen por los flags `is_sold`,
+        `is_purchased` e `is_produced`, que se combinan libremente.
+
+        Solo `name` y `unit` son obligatorios. Los ausentes toman los valores por
+        defecto del dominio: `track_stock = true`, `is_active = true`, el resto de
+        los flags `false` y los importes en `0`. Los campos de texto se guardan
+        recortando espacios.
+
+        Los importes y cantidades (`current_stock`, `min_stock`, `sale_price`,
+        `cost`) aceptan números o cadenas con los dígitos exactos: se guardan como
+        `numeric(14,3)` y `numeric(14,2)` mediante `shopspring/decimal`, sin pasar
+        por `float64`.
+      operationId: createProduct
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductRequest"
+      responses:
+        "201":
+          description: Producto creado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "400":
+          description: |
+            JSON malformado, `name` o `unit` ausentes, o textos que exceden el
+            largo máximo (`name` 150, `sku` 50, `description` 2000, `unit` 20).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                jsonInvalido:
+                  value:
+                    error: el body debe ser un JSON válido
+                sinNombre:
+                  value:
+                    error: "datos inválidos: name es obligatorio"
+                sinUnidad:
+                  value:
+                    error: "datos inválidos: unit es obligatorio"
+                nombreVacio:
+                  value:
+                    error: el nombre del producto es obligatorio
+        "401":
+          description: Falta el header `Authorization` o el token no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: falta el header Authorization
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Listar productos del catálogo
+      description: |
+        Devuelve los productos no eliminados ordenados por `name` ascendente. Los
+        filtros son opcionales, se combinan con AND y solo se aplican cuando
+        vienen. `search` ignora mayúsculas y busca en `name`, `sku` y
+        `description`. Sin coincidencias devuelve `[]`.
+      operationId: listProducts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: is_sold
+          in: query
+          required: false
+          description: Solo los productos que se venden.
+          schema:
+            type: boolean
+        - name: is_purchased
+          in: query
+          required: false
+          description: Solo los productos que se compran a proveedores.
+          schema:
+            type: boolean
+        - name: is_produced
+          in: query
+          required: false
+          description: Solo los productos que se elaboran en la panadería.
+          schema:
+            type: boolean
+        - name: is_active
+          in: query
+          required: false
+          description: Solo los productos activos (o solo los inactivos con `false`).
+          schema:
+            type: boolean
+        - name: track_stock
+          in: query
+          required: false
+          description: Solo los productos que controlan stock.
+          schema:
+            type: boolean
+        - name: search
+          in: query
+          required: false
+          description: Texto libre para buscar en `name`, `sku` y `description`.
+          schema:
+            type: string
+            example: pan
+      responses:
+        "200":
+          description: Lista de productos (vacía si no hay coincidencias).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+        "400":
+          description: Un filtro booleano trae un valor que no es `true`/`false`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: is_sold debe ser true o false
+        "401":
+          description: Falta el header `Authorization` o el token no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/products/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Identificador del producto.
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Obtener un producto
+      operationId: getProduct
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Producto encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "400":
+          description: El `id` no es un UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el id debe ser un UUID válido
+        "401":
+          description: Falta el header `Authorization` o el token no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El producto no existe o fue eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: producto no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Actualizar un producto
+      description: |
+        Actualización parcial: solo se modifican los campos enviados y los
+        ausentes conservan su valor. Un `null` explícito se interpreta como
+        campo no enviado. `name` y `unit`, si vienen, no pueden quedar vacíos
+        después de recortar espacios. Los flags ausentes no se reinician.
+      operationId: updateProduct
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductRequest"
+      responses:
+        "200":
+          description: Producto actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "400":
+          description: |
+            `id` inválido, JSON malformado, texto que excede el largo máximo o
+            `name`/`unit` enviados vacíos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                nombreVacio:
+                  value:
+                    error: el nombre del producto es obligatorio
+                unidadVacia:
+                  value:
+                    error: la unidad del producto es obligatoria
+                textoLargo:
+                  value:
+                    error: "datos inválidos: name debe tener como máximo 150 caracteres"
+        "401":
+          description: Falta el header `Authorization` o el token no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El producto no existe o fue eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: producto no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Eliminar un producto (soft delete)
+      description: |
+        Completa `deleted_at` y devuelve `204` sin body. No borra la fila
+        físicamente, pero el producto deja de aparecer en el listado y en las
+        consultas por id. Las líneas de pedidos existentes conservan su copia del
+        nombre, unidad y precio.
+      operationId: deleteProduct
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Producto eliminado (sin body).
+        "400":
+          description: El `id` no es un UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el id debe ser un UUID válido
+        "401":
+          description: Falta el header `Authorization` o el token no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El producto no existe o ya estaba eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: producto no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/orders:
+    post:
+      summary: Crear un pedido con sus líneas
+      description: |
+        Da de alta la cabecera y las líneas en una sola transacción. El único
+        campo obligatorio es `contact_id` (el tercero tiene que existir); además,
+        un pedido que no es borrador necesita al menos una línea.
+
+        El precio **no** se recibe: se toma del `sale_price` del catálogo (debe
+        ser mayor que cero) y queda congelado en la línea junto con el nombre y
+        la unidad del producto. Los totales los calcula el service:
+        `line_total = quantity × unit_price`, `subtotal` es la suma de las líneas
+        y `final_amount = subtotal − discount_amount`.
+
+        El código interno (`PED-YYYYMMDD-XXXX`) se asigna dentro de la
+        transacción con la secuencia diaria en UTC y se reintenta hasta 5 veces
+        si choca con el índice único.
+      operationId: createOrder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Pedido creado con sus líneas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: |
+            Body inválido (JSON malformado, `contact_id` ausente o sin UUID,
+            estado/medio de pago fuera de la lista, fecha inválida), tercero o
+            producto inexistente, cantidad menor o igual a cero, descuento mayor
+            que el subtotal o pedido confirmado sin líneas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                sinContacto:
+                  value:
+                    error: "datos inválidos: contact_id es obligatorio"
+                terceroInexistente:
+                  value:
+                    error: el tercero indicado no existe
+                sinLineas:
+                  value:
+                    error: el pedido debe tener al menos un ítem
+                descuentoInvalido:
+                  value:
+                    error: el descuento no puede ser negativo ni superar el subtotal del pedido
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: falta el header Authorization
+        "409":
+          description: No se pudo generar un código único después de 5 intentos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: no se pudo generar el código del pedido, intente de nuevo
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Listar pedidos
+      description: |
+        Devuelve las cabeceras no eliminadas, de la más reciente a la más antigua
+        y **sin líneas**. Los filtros son opcionales y se combinan entre sí.
+        `from` y `to` acotan `ordered_at` y son inclusivos; un `to` sin hora cubre
+        el día completo. `search` ignora mayúsculas y busca en el código, las
+        notas y el nombre del tercero. Sin coincidencias devuelve `[]`.
+      operationId: listOrders
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: contact_id
+          in: query
+          required: false
+          description: Solo los pedidos del tercero indicado.
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          description: Estado del pedido.
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+        - name: payment_status
+          in: query
+          required: false
+          description: Estado de pago.
+          schema:
+            $ref: "#/components/schemas/PaymentStatus"
+        - name: from
+          in: query
+          required: false
+          description: Fecha mínima de `ordered_at` (RFC3339 o `YYYY-MM-DD`).
+          schema:
+            type: string
+            example: "2026-11-01"
+        - name: to
+          in: query
+          required: false
+          description: Fecha máxima de `ordered_at` (inclusiva).
+          schema:
+            type: string
+            example: "2026-11-30"
+        - name: search
+          in: query
+          required: false
+          description: Texto libre para buscar en código, notas y nombre del tercero.
+          schema:
+            type: string
+            example: mostrador
+      responses:
+        "200":
+          description: Lista de pedidos (vacía si no hay coincidencias).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrderSummary"
+        "400":
+          description: Filtro inválido (`contact_id` sin UUID, estado desconocido o fecha mal formada).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "from debe ser una fecha ISO 8601 (por ejemplo 2025-03-01 o 2025-03-01T15:04:05Z)"
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Identificador del pedido.
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Obtener un pedido con sus líneas
+      operationId: getOrder
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pedido encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: El `id` no es un UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "datos inválidos: id debe ser un UUID válido"
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El pedido no existe o fue eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: pedido no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Actualizar un pedido
+      description: |
+        Actualiza cabecera y líneas. Los campos de la cabecera son opcionales: los
+        ausentes no se modifican y los vacíos (`delivery_at`, `notes`) se limpian.
+        `items` ausente deja las líneas intactas; `items` presente define el
+        conjunto final (las líneas que no aparecen se eliminan lógicamente) y cada
+        elemento con `id` modifica una existente, sin `id` agrega una nueva.
+
+        Se rechazan las líneas ajenas al pedido o repetidas, las que ya tienen
+        `quantity_delivered > 0`, y dejar sin líneas un pedido que no es borrador.
+        Los totales se recalculan con los precios del catálogo.
+      operationId: updateOrder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderRequest"
+      responses:
+        "200":
+          description: Pedido actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: |
+            Body o `id` inválido, tercero/producto inexistente, línea ajena o
+            repetida, línea ya entregada, cantidad inválida, descuento mayor que el
+            subtotal o pedido no borrador sin líneas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                itemAjeno:
+                  value:
+                    error: el ítem indicado no pertenece al pedido
+                itemDuplicado:
+                  value:
+                    error: el ítem aparece más de una vez en el pedido
+                itemEntregado:
+                  value:
+                    error: no se puede quitar un ítem con cantidad entregada
+                sinLineas:
+                  value:
+                    error: el pedido debe tener al menos un ítem
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El pedido no existe o fue eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: pedido no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Eliminar un pedido (soft delete)
+      description: |
+        Marca la cabecera y sus líneas como eliminadas (`deleted_at`) dentro de una
+        transacción. No borra físicamente ninguna fila.
+      operationId: deleteOrder
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Pedido eliminado (sin body).
+        "400":
+          description: El `id` no es un UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Falta el token o no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: El pedido no existe o ya estaba eliminado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: pedido no encontrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -678,6 +1289,453 @@ components:
           type: boolean
         is_active:
           type: boolean
+    Product:
+      type: object
+      description: |
+        Ítem del catálogo. Los flags `is_sold`, `is_purchased` e `is_produced` se
+        combinan libremente, así que un mismo ítem puede venderse y comprarse a la
+        vez. Las cantidades usan 3 decimales y los importes 2: se devuelven con
+        los dígitos exactos de la base, sin pasar por coma flotante.
+      required: [id, name, unit, is_sold, is_purchased, is_produced, track_stock, current_stock, min_stock, sale_price, cost, is_active, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+        name:
+          type: string
+          maxLength: 150
+          example: Pan francés
+        sku:
+          type: string
+          maxLength: 50
+          description: Código interno opcional; se omite de la respuesta si está vacío.
+          example: PAN-FRA-001
+        description:
+          type: string
+          maxLength: 2000
+          description: Descripción opcional; se omite de la respuesta si está vacía.
+        unit:
+          type: string
+          maxLength: 20
+          description: Unidad de medida (kg, unidad, caja…).
+          example: kg
+        is_sold:
+          type: boolean
+          description: Se vende. Por defecto `false`.
+          example: true
+        is_purchased:
+          type: boolean
+          description: Se compra a proveedores. Por defecto `false`.
+          example: false
+        is_produced:
+          type: boolean
+          description: Se elabora en la panadería. Por defecto `false`.
+          example: true
+        track_stock:
+          type: boolean
+          description: Controla stock. Por defecto `true`.
+          example: true
+        current_stock:
+          type: number
+          description: Stock actual con 3 decimales; por defecto `0`.
+          example: 25.5
+        min_stock:
+          type: number
+          description: Stock mínimo con 3 decimales; por defecto `0`.
+          example: 5
+        sale_price:
+          type: number
+          description: Precio de venta con 2 decimales; por defecto `0`.
+          example: 1200
+        cost:
+          type: number
+          description: Costo con 2 decimales; por defecto `0`.
+          example: 700
+        is_active:
+          type: boolean
+          description: Producto activo. Por defecto `true`.
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateProductRequest:
+      type: object
+      description: |
+        Solo `name` y `unit` son obligatorios. Los campos ausentes toman los
+        valores por defecto del dominio y los textos se guardan recortando
+        espacios. Los importes aceptan número o cadena (`"1200.00"`), para no
+        perder precisión.
+      required: [name, unit]
+      properties:
+        name:
+          type: string
+          maxLength: 150
+          description: No puede quedar vacío después de recortar espacios.
+          example: Pan francés
+        sku:
+          type: string
+          maxLength: 50
+          example: PAN-FRA-001
+        description:
+          type: string
+          maxLength: 2000
+          example: Pan de corteza crujiente, horneado a diario.
+        unit:
+          type: string
+          maxLength: 20
+          description: No puede quedar vacía después de recortar espacios.
+          example: kg
+        is_sold:
+          type: boolean
+          default: false
+        is_purchased:
+          type: boolean
+          default: false
+        is_produced:
+          type: boolean
+          default: false
+        track_stock:
+          type: boolean
+          default: true
+        current_stock:
+          type: number
+          description: 3 decimales como máximo; por defecto `0`.
+          example: 25.5
+        min_stock:
+          type: number
+          description: 3 decimales como máximo; por defecto `0`.
+          example: 5
+        sale_price:
+          type: number
+          description: 2 decimales como máximo; por defecto `0`.
+          example: 1200
+        cost:
+          type: number
+          description: 2 decimales como máximo; por defecto `0`.
+          example: 700
+        is_active:
+          type: boolean
+          default: true
+    UpdateProductRequest:
+      type: object
+      description: |
+        Actualización parcial: los campos ausentes (o enviados como `null`) no se
+        modifican. Enviar `sku` o `description` vacíos los limpia; `name` y `unit`
+        no pueden quedar vacíos.
+      properties:
+        name:
+          type: string
+          maxLength: 150
+          description: No puede quedar vacío después de recortar espacios.
+        sku:
+          type: string
+          maxLength: 50
+          description: Vacío borra el SKU.
+        description:
+          type: string
+          maxLength: 2000
+          description: Vacío borra la descripción.
+        unit:
+          type: string
+          maxLength: 20
+          description: No puede quedar vacía después de recortar espacios.
+        is_sold:
+          type: boolean
+        is_purchased:
+          type: boolean
+        is_produced:
+          type: boolean
+        track_stock:
+          type: boolean
+        current_stock:
+          type: number
+          description: 3 decimales como máximo.
+        min_stock:
+          type: number
+          description: 3 decimales como máximo.
+        sale_price:
+          type: number
+          description: 2 decimales como máximo.
+        cost:
+          type: number
+          description: 2 decimales como máximo.
+        is_active:
+          type: boolean
+    Order:
+      description: Pedido con sus líneas.
+      allOf:
+        - $ref: "#/components/schemas/OrderSummary"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              description: Líneas vigentes del pedido.
+              items:
+                $ref: "#/components/schemas/OrderItem"
+    CreateOrderItemRequest:
+      type: object
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+          description: Producto del catálogo; debe existir y tener `sale_price` mayor que cero.
+          example: 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+        quantity:
+          type: number
+          description: Mayor que cero; se redondea a 3 decimales.
+          example: 12.5
+        notes:
+          type: string
+          maxLength: 2000
+          example: Cortado fino
+    CreateOrderRequest:
+      type: object
+      required: [contact_id]
+      properties:
+        contact_id:
+          type: string
+          format: uuid
+          description: Tercero que compra; debe existir y no estar eliminado.
+          example: 7a1d9f52-6c3b-4b0e-9c2a-6f1f0d8e4b21
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        delivery_at:
+          type: string
+          description: Fecha y hora de entrega (RFC3339) o `YYYY-MM-DD`.
+          example: "2026-11-03T09:00:00Z"
+        delivery_type:
+          $ref: "#/components/schemas/DeliveryType"
+        discount_amount:
+          type: number
+          description: Descuento global; no puede superar el subtotal ni ser negativo.
+          example: 2000
+        payment_method:
+          $ref: "#/components/schemas/PaymentMethod"
+        payment_status:
+          $ref: "#/components/schemas/PaymentStatus"
+        amount_paid:
+          type: number
+          example: 0
+        notes:
+          type: string
+          maxLength: 2000
+          example: Entregar por la mañana
+        is_active:
+          type: boolean
+          default: true
+        items:
+          type: array
+          description: |
+            Líneas del pedido. Solo los pedidos en borrador pueden quedar sin
+            líneas; el resto necesita al menos una.
+          items:
+            $ref: "#/components/schemas/CreateOrderItemRequest"
+    UpdateOrderItemRequest:
+      type: object
+      description: |
+        Línea de una actualización. Con `id` modifica la existente (los campos
+        ausentes se conservan); sin `id` agrega una nueva, y en ese caso
+        `product_id` y `quantity` son obligatorios.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Línea existente del pedido; debe pertenecer a él y no estar repetida.
+          example: 5b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+        product_id:
+          type: string
+          format: uuid
+          description: |
+            Producto del catálogo. Si cambia, se refrescan nombre, unidad y precio
+            congelado.
+        quantity:
+          type: number
+          description: Nueva cantidad; no puede quedar por debajo de `quantity_delivered`.
+        notes:
+          type: string
+          maxLength: 2000
+          description: Si se envía vacío, limpia las notas de la línea.
+    UpdateOrderRequest:
+      type: object
+      description: Todos los campos son opcionales; los ausentes no se modifican.
+      properties:
+        contact_id:
+          type: string
+          format: uuid
+          description: Si se envía, el tercero tiene que existir.
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        delivery_at:
+          type: string
+          description: Fecha de entrega (RFC3339 o `YYYY-MM-DD`); vacío limpia el campo.
+        delivery_type:
+          $ref: "#/components/schemas/DeliveryType"
+        discount_amount:
+          type: number
+          description: Reemplaza el descuento global; no puede superar el subtotal.
+        payment_method:
+          $ref: "#/components/schemas/PaymentMethod"
+        payment_status:
+          $ref: "#/components/schemas/PaymentStatus"
+        amount_paid:
+          type: number
+        notes:
+          type: string
+          maxLength: 2000
+          description: Vacío limpia las notas del pedido.
+        is_active:
+          type: boolean
+        items:
+          type: array
+          description: |
+            Conjunto final de líneas. Ausente deja las líneas intactas; `[]` borra
+            todas las que no tengan entregas (solo válido para borradores). Las
+            líneas que no aparezcan se eliminan lógicamente.
+          items:
+            $ref: "#/components/schemas/UpdateOrderItemRequest"
+    OrderStatus:
+      type: string
+      description: Estado del pedido.
+      enum: [draft, confirmed, in_production, ready, partially_delivered, delivered, cancelled]
+      example: confirmed
+    DeliveryType:
+      type: string
+      description: Forma de entrega (opcional).
+      enum: [pickup, delivery]
+      example: delivery
+    PaymentMethod:
+      type: string
+      description: Medio de pago (opcional, informativo).
+      enum: [cash, transfer, card, current_account, other]
+      example: transfer
+    PaymentStatus:
+      type: string
+      description: Estado de pago (informativo, no lo deriva el módulo).
+      enum: [pending, partial, paid]
+      example: pending
+    OrderItem:
+      type: object
+      description: |
+        Línea de un pedido. El precio y los datos del producto son una copia del
+        catálogo al momento de guardar: si el producto cambia de precio o de
+        nombre, la línea conserva los valores originales.
+      required: [id, product_id, product_name, quantity, quantity_delivered, unit_price, line_total, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+        product_id:
+          type: string
+          format: uuid
+          example: 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+        product_name:
+          type: string
+          description: Nombre del producto en el momento de la venta.
+          example: Pan francés
+        unit:
+          type: string
+          description: Unidad de venta copiada del producto (kg, unidad, caja…).
+          example: kg
+        quantity:
+          type: number
+          description: Decimal exacto.
+          example: 12.5
+        quantity_delivered:
+          type: number
+          description: |
+            Cantidad ya entregada. Una línea con este valor mayor que cero queda
+            bloqueada para ediciones y no se puede eliminar del pedido.
+          example: 0
+        unit_price:
+          type: number
+          description: Precio unitario congelado desde `sale_price` del catálogo.
+          example: 1200
+        line_total:
+          type: number
+          description: "`quantity × unit_price`."
+          example: 15000
+        notes:
+          type: string
+          maxLength: 2000
+          example: Cortado fino
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    OrderSummary:
+      type: object
+      description: Cabecera de un pedido tal como la devuelve el listado (sin líneas).
+      required: [id, code, contact_id, status, payment_status, ordered_at, subtotal, discount_amount, final_amount, amount_paid, is_active, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          description: Código interno `PED-YYYYMMDD-XXXX` asignado por el servidor.
+          example: PED-20261102-0007
+        contact_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        ordered_at:
+          type: string
+          format: date-time
+          description: Fecha del pedido (se usa como fecha de negocio).
+        delivery_at:
+          type: string
+          format: date-time
+          description: Fecha y hora de entrega pactada; ausente si no se definió.
+        delivery_type:
+          $ref: "#/components/schemas/DeliveryType"
+        subtotal:
+          type: number
+          description: Suma de los `line_total`.
+          example: 30000
+        discount_amount:
+          type: number
+          example: 2000
+        final_amount:
+          type: number
+          description: "`subtotal − discount_amount`."
+          example: 28000
+        payment_method:
+          $ref: "#/components/schemas/PaymentMethod"
+        payment_status:
+          $ref: "#/components/schemas/PaymentStatus"
+        amount_paid:
+          type: number
+          example: 0
+        parent_order_id:
+          type: string
+          format: uuid
+          description: Reservado para pedidos derivados (por ejemplo, una devolución).
+        notes:
+          type: string
+          maxLength: 2000
+        created_by:
+          type: string
+          format: uuid
+          description: Usuario autenticado que creó el pedido.
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     Error:
       type: object
       required: [error]
