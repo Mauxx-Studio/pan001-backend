@@ -19,6 +19,18 @@ var (
 	// ErrPasswordTooLong se devuelve cuando la contraseña excede lo que bcrypt
 	// procesa (72 bytes): a partir de ahí se ignoraría el resto.
 	ErrPasswordTooLong = errors.New("la contraseña no puede superar los 72 bytes")
+	// ErrPasswordTooShort se devuelve al elegir una contraseña nueva más corta
+	// que el mínimo permitido.
+	ErrPasswordTooShort = errors.New("la contraseña debe tener al menos 8 caracteres")
+	// ErrInvalidCurrentPassword se devuelve cuando la contraseña actual enviada
+	// no coincide con la guardada al cambiar la contraseña.
+	ErrInvalidCurrentPassword = errors.New("la contraseña actual no es correcta")
+	// ErrUserNameRequired indica que se intentó dejar vacío el nombre completo
+	// al actualizar el propio perfil.
+	ErrUserNameRequired = errors.New("el nombre completo es obligatorio")
+	// ErrEmailRequired indica que se intentó dejar vacío el email al actualizar
+	// el propio perfil.
+	ErrEmailRequired = errors.New("el email es obligatorio")
 )
 
 // Errores de dominio del módulo de terceros (contacts).

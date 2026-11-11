@@ -27,6 +27,8 @@ type Handlers struct {
 // Rutas protegidas (requieren "Authorization: Bearer <token>"):
 //
 //	GET    /api/v1/auth/me
+//	PUT    /api/v1/auth/me
+//	PUT    /api/v1/auth/me/password
 //	POST   /api/v1/contacts
 //	GET    /api/v1/contacts
 //	GET    /api/v1/contacts/:id
@@ -56,7 +58,12 @@ func Register(app *fiber.App, handlers Handlers, tokens middleware.TokenParser) 
 
 	// Grupo protegido: el middleware se aplica a todo lo que se registre en él.
 	protected := api.Group("", middleware.Authenticate(tokens))
+
+	// Perfil del usuario autenticado. El id sale del token, así que estas rutas
+	// solo permiten leer y modificar el propio registro.
 	protected.Get("/auth/me", handlers.Auth.Me)
+	protected.Put("/auth/me", handlers.Auth.UpdateProfile)
+	protected.Put("/auth/me/password", handlers.Auth.ChangePassword)
 
 	// Terceros (contactos): CRUD completo detrás del JWT.
 	contacts := protected.Group("/contacts")

@@ -77,6 +77,33 @@ func (r *memUserRepository) UpdateLastLogin(_ context.Context, id uuid.UUID, log
 	return nil
 }
 
+func (r *memUserRepository) Update(_ context.Context, user *model.User) error {
+	stored, ok := r.byID[user.ID]
+	if !ok {
+		return model.ErrUserNotFound
+	}
+	if existing, taken := r.byEmail[user.Email]; taken && existing.ID != user.ID {
+		return model.ErrEmailAlreadyExists
+	}
+	// El email es la clave del índice: si cambió, hay que reindexar.
+	if stored.Email != user.Email {
+		delete(r.byEmail, stored.Email)
+	}
+	user.UpdatedAt = time.Now().UTC()
+	r.byEmail[user.Email] = user
+	r.byID[user.ID] = user
+	return nil
+}
+
+func (r *memUserRepository) UpdatePassword(_ context.Context, id uuid.UUID, passwordHash string) error {
+	user, ok := r.byID[id]
+	if !ok {
+		return model.ErrUserNotFound
+	}
+	user.PasswordHash = passwordHash
+	return nil
+}
+
 // newTestApp monta las rutas reales con el middleware JWT real y un
 // repositorio en memoria.
 func newTestApp(t *testing.T) (*fiber.App, *memUserRepository) {
@@ -698,5 +725,145 @@ func TestProductsCRUDConToken(t *testing.T) {
 	status, body = do(t, app, http.MethodGet, "/api/v1/products/"+created.ID, "", token)
 	if status != fiber.StatusNotFound {
 		t.Fatalf("obtener tras borrar: status = %d, se esperaba %d (body: %s)", status, fiber.StatusNotFound, body)
+	}
+}
+func TestMeUpdateSinTokenResponde401(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me", `{"full_name":"María Gómez"}`, "")
+
+	if status != fiber.StatusUnauthorized {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusUnauthorized, body)
+	}
+}
+
+func TestMeUpdateCambiaSoloLosCamposEnviados(t *testing.T) {
+	app, repo := newTestApp(t)
+	token := register(t, app, "maria@pan001.com", model.RoleVendedor)
+
+	// role e is_active viajan en el body a propósito: el endpoint debe ignorarlos.
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me",
+		`{"full_name":"  María Gómez  ","phone":"1144440000","role":"admin","is_active":false}`, token)
+	if status != fiber.StatusOK {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusOK, body)
+	}
+
+	var updated struct {
+		Email    string `json:"email"`
+		FullName string `json:"full_name"`
+		Phone    string `json:"phone"`
+		Role     string `json:"role"`
+		IsActive bool   `json:"is_active"`
+	}
+	if err := json.Unmarshal([]byte(body), &updated); err != nil {
+		t.Fatalf("respuesta no es JSON válido: %v (body: %s)", err, body)
+	}
+	if updated.FullName != "María Gómez" || updated.Phone != "1144440000" {
+		t.Errorf("perfil = %+v, se esperaban los campos actualizados y recortados", updated)
+	}
+	if updated.Email != "maria@pan001.com" {
+		t.Errorf("email = %q, el email no debía cambiar", updated.Email)
+	}
+	if updated.Role != model.RoleVendedor || !updated.IsActive {
+		t.Errorf("role/is_active = %q/%v, el propio usuario no debe poder cambiarlos", updated.Role, updated.IsActive)
+	}
+	if strings.Contains(body, "password") {
+		t.Errorf("la respuesta no debe exponer la contraseña: %s", body)
+	}
+
+	stored := repo.byEmail["maria@pan001.com"]
+	if stored.FullName != "María Gómez" || stored.Phone != "1144440000" {
+		t.Errorf("el cambio no quedó persistido: %+v", stored)
+	}
+}
+
+func TestMeUpdateNombreVacioResponde400(t *testing.T) {
+	app, _ := newTestApp(t)
+	token := register(t, app, "maria@pan001.com", model.RoleVendedor)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me", `{"full_name":"   "}`, token)
+
+	if status != fiber.StatusBadRequest {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusBadRequest, body)
+	}
+}
+
+func TestMeUpdateEmailDuplicadoResponde409(t *testing.T) {
+	app, _ := newTestApp(t)
+	register(t, app, "maria@pan001.com", model.RoleVendedor)
+	token := register(t, app, "pedro@pan001.com", model.RoleVendedor)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me", `{"email":"maria@pan001.com"}`, token)
+
+	if status != fiber.StatusConflict {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusConflict, body)
+	}
+}
+
+func TestChangePasswordEndToEnd(t *testing.T) {
+	app, _ := newTestApp(t)
+	token := register(t, app, "maria@pan001.com", model.RoleVendedor)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me/password",
+		`{"current_password":"secreto123","new_password":"nuevaClave123"}`, token)
+	if status != fiber.StatusNoContent {
+		t.Fatalf("cambiar contraseña: status = %d, se esperaba %d (body: %s)", status, fiber.StatusNoContent, body)
+	}
+	if body != "" {
+		t.Errorf("body = %q, el cambio de contraseña no debe devolver contenido", body)
+	}
+
+	// La contraseña nueva funciona y la anterior ya no.
+	status, body = do(t, app, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"maria@pan001.com","password":"nuevaClave123"}`, "")
+	if status != fiber.StatusOK {
+		t.Fatalf("login con la contraseña nueva: status = %d, se esperaba %d (body: %s)", status, fiber.StatusOK, body)
+	}
+
+	status, body = do(t, app, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"maria@pan001.com","password":"secreto123"}`, "")
+	if status != fiber.StatusUnauthorized {
+		t.Fatalf("login con la contraseña anterior: status = %d, se esperaba %d (body: %s)", status, fiber.StatusUnauthorized, body)
+	}
+}
+
+func TestChangePasswordActualIncorrectaResponde400(t *testing.T) {
+	app, _ := newTestApp(t)
+	token := register(t, app, "maria@pan001.com", model.RoleVendedor)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me/password",
+		`{"current_password":"incorrecta","new_password":"nuevaClave123"}`, token)
+
+	if status != fiber.StatusBadRequest {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusBadRequest, body)
+	}
+	if !strings.Contains(body, "la contraseña actual no es correcta") {
+		t.Errorf("body = %q, se esperaba el mensaje de contraseña actual incorrecta", body)
+	}
+}
+
+func TestChangePasswordDemasiadoCortaResponde400(t *testing.T) {
+	app, _ := newTestApp(t)
+	token := register(t, app, "maria@pan001.com", model.RoleVendedor)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me/password",
+		`{"current_password":"secreto123","new_password":"corta"}`, token)
+
+	if status != fiber.StatusBadRequest {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusBadRequest, body)
+	}
+	if !strings.Contains(body, "new_password") {
+		t.Errorf("body = %q, se esperaba el nombre del campo en el mensaje", body)
+	}
+}
+
+func TestChangePasswordSinTokenResponde401(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	status, body := do(t, app, http.MethodPut, "/api/v1/auth/me/password",
+		`{"current_password":"secreto123","new_password":"nuevaClave123"}`, "")
+
+	if status != fiber.StatusUnauthorized {
+		t.Fatalf("status = %d, se esperaba %d (body: %s)", status, fiber.StatusUnauthorized, body)
 	}
 }

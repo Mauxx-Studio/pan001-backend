@@ -65,6 +65,33 @@ func (r *fakeUserRepository) UpdateLastLogin(_ context.Context, id uuid.UUID, lo
 	return nil
 }
 
+func (r *fakeUserRepository) Update(_ context.Context, user *model.User) error {
+	stored, ok := r.byID[user.ID]
+	if !ok {
+		return model.ErrUserNotFound
+	}
+	if existing, taken := r.users[user.Email]; taken && existing.ID != user.ID {
+		return model.ErrEmailAlreadyExists
+	}
+	// El email es la clave del índice: si cambió, hay que reindexar.
+	if stored.Email != user.Email {
+		delete(r.users, stored.Email)
+	}
+	user.UpdatedAt = time.Now().UTC()
+	r.users[user.Email] = user
+	r.byID[user.ID] = user
+	return nil
+}
+
+func (r *fakeUserRepository) UpdatePassword(_ context.Context, id uuid.UUID, passwordHash string) error {
+	user, ok := r.byID[id]
+	if !ok {
+		return model.ErrUserNotFound
+	}
+	user.PasswordHash = passwordHash
+	return nil
+}
+
 // fakeTokenGenerator devuelve un token fijo y registra los usuarios para los
 // que se pidió un token.
 type fakeTokenGenerator struct {
@@ -352,5 +379,201 @@ func TestProfileUsuarioSoftDeleted(t *testing.T) {
 	_, err := svc.Profile(context.Background(), user.ID)
 	if !errors.Is(err, model.ErrUserNotFound) {
 		t.Fatalf("error = %v, se esperaba model.ErrUserNotFound para un usuario eliminado", err)
+	}
+}
+func TestUpdateProfileModificaSoloLosCamposEnviados(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	user.Phone = "1155550000"
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	fullName := "  María Gómez  "
+	phone := " 1144440000 "
+	got, err := svc.UpdateProfile(context.Background(), user.ID, UpdateProfileInput{
+		FullName: &fullName,
+		Phone:    &phone,
+	})
+	if err != nil {
+		t.Fatalf("UpdateProfile() devolvió un error inesperado: %v", err)
+	}
+
+	if got.FullName != "María Gómez" {
+		t.Errorf("FullName = %q, se esperaba el valor sin espacios sobrantes", got.FullName)
+	}
+	if got.Phone != "1144440000" {
+		t.Errorf("Phone = %q, se esperaba el valor sin espacios sobrantes", got.Phone)
+	}
+	if got.Email != "user@example.com" {
+		t.Errorf("Email = %q, el email no debía cambiar", got.Email)
+	}
+	if got.Role != model.RoleVendedor || !got.IsActive {
+		t.Errorf("Role/IsActive = %q/%v, el perfil propio no debe poder cambiarlos", got.Role, got.IsActive)
+	}
+	if repo.byID[user.ID].FullName != "María Gómez" {
+		t.Error("el cambio no quedó persistido en el repositorio")
+	}
+}
+
+func TestUpdateProfileNormalizaEmail(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	email := "  Maria@Ejemplo.com "
+	got, err := svc.UpdateProfile(context.Background(), user.ID, UpdateProfileInput{Email: &email})
+	if err != nil {
+		t.Fatalf("UpdateProfile() devolvió un error inesperado: %v", err)
+	}
+	if got.Email != "maria@ejemplo.com" {
+		t.Errorf("Email = %q, se esperaba el email normalizado", got.Email)
+	}
+	if _, err := repo.FindByEmail(context.Background(), "maria@ejemplo.com"); err != nil {
+		t.Errorf("el email nuevo no quedó indexado: %v", err)
+	}
+}
+
+func TestUpdateProfileRechazaNombreVacio(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	fullName := "   "
+	_, err := svc.UpdateProfile(context.Background(), user.ID, UpdateProfileInput{FullName: &fullName})
+	if !errors.Is(err, model.ErrUserNameRequired) {
+		t.Fatalf("error = %v, se esperaba model.ErrUserNameRequired", err)
+	}
+	if user.FullName != "Usuario de prueba" {
+		t.Errorf("FullName = %q, un error de validación no debe modificar la entidad", user.FullName)
+	}
+}
+
+func TestUpdateProfileRechazaEmailDuplicado(t *testing.T) {
+	repo := newFakeUserRepository()
+
+	first := newTestUser(t, "secreto123")
+	second := newTestUser(t, "secreto123")
+	second.ID = uuid.New()
+	second.Email = "otro@example.com"
+	repo.users[first.Email] = first
+	repo.byID[first.ID] = first
+	repo.users[second.Email] = second
+	repo.byID[second.ID] = second
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	email := first.Email
+	_, err := svc.UpdateProfile(context.Background(), second.ID, UpdateProfileInput{Email: &email})
+	if !errors.Is(err, model.ErrEmailAlreadyExists) {
+		t.Fatalf("error = %v, se esperaba model.ErrEmailAlreadyExists", err)
+	}
+}
+
+func TestUpdateProfileUsuarioInexistente(t *testing.T) {
+	svc := NewAuthService(newFakeUserRepository(), &fakeTokenGenerator{token: "token"})
+
+	fullName := "María Gómez"
+	_, err := svc.UpdateProfile(context.Background(), uuid.New(), UpdateProfileInput{FullName: &fullName})
+	if !errors.Is(err, model.ErrUserNotFound) {
+		t.Fatalf("error = %v, se esperaba model.ErrUserNotFound", err)
+	}
+}
+
+func TestUpdateProfileUsuarioInactivo(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	user.IsActive = false
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	fullName := "María Gómez"
+	_, err := svc.UpdateProfile(context.Background(), user.ID, UpdateProfileInput{FullName: &fullName})
+	if !errors.Is(err, model.ErrUserInactive) {
+		t.Fatalf("error = %v, se esperaba model.ErrUserInactive", err)
+	}
+}
+
+func TestChangePasswordGuardaElHashNuevo(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	if err := svc.ChangePassword(context.Background(), user.ID, "secreto123", "nuevaClave123"); err != nil {
+		t.Fatalf("ChangePassword() devolvió un error inesperado: %v", err)
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("nuevaClave123")) != nil {
+		t.Error("la contraseña nueva no quedó guardada como hash")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("secreto123")) == nil {
+		t.Error("la contraseña anterior sigue siendo válida")
+	}
+}
+
+func TestChangePasswordActualIncorrecta(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	err := svc.ChangePassword(context.Background(), user.ID, "incorrecta", "nuevaClave123")
+	if !errors.Is(err, model.ErrInvalidCurrentPassword) {
+		t.Fatalf("error = %v, se esperaba model.ErrInvalidCurrentPassword", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("secreto123")) != nil {
+		t.Error("la contraseña no debía cambiar cuando la actual no coincide")
+	}
+}
+
+func TestChangePasswordDemasiadoCorta(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	err := svc.ChangePassword(context.Background(), user.ID, "secreto123", "corta")
+	if !errors.Is(err, model.ErrPasswordTooShort) {
+		t.Fatalf("error = %v, se esperaba model.ErrPasswordTooShort", err)
+	}
+}
+
+func TestChangePasswordUsuarioInexistente(t *testing.T) {
+	svc := NewAuthService(newFakeUserRepository(), &fakeTokenGenerator{token: "token"})
+
+	err := svc.ChangePassword(context.Background(), uuid.New(), "secreto123", "nuevaClave123")
+	if !errors.Is(err, model.ErrUserNotFound) {
+		t.Fatalf("error = %v, se esperaba model.ErrUserNotFound", err)
+	}
+}
+
+func TestChangePasswordUsuarioInactivo(t *testing.T) {
+	repo := newFakeUserRepository()
+	user := newTestUser(t, "secreto123")
+	user.IsActive = false
+	repo.users[user.Email] = user
+	repo.byID[user.ID] = user
+
+	svc := NewAuthService(repo, &fakeTokenGenerator{token: "token"})
+
+	err := svc.ChangePassword(context.Background(), user.ID, "secreto123", "nuevaClave123")
+	if !errors.Is(err, model.ErrUserInactive) {
+		t.Fatalf("error = %v, se esperaba model.ErrUserInactive", err)
 	}
 }

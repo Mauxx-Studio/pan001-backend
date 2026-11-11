@@ -25,4 +25,10 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*model.User, error)
 	// UpdateLastLogin actualiza la marca de último login.
 	UpdateLastLogin(ctx context.Context, id uuid.UUID, loggedAt time.Time) error
+	// Update guarda los cambios de perfil del usuario (nunca la contraseña).
+	// Devuelve model.ErrEmailAlreadyExists si el email nuevo ya está en uso y
+	// model.ErrUserNotFound si el usuario desapareció.
+	Update(ctx context.Context, user *model.User) error
+	// UpdatePassword actualiza únicamente el hash de la contraseña.
+	UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error
 }

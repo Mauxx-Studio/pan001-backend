@@ -20,6 +20,10 @@ var fieldLabels = map[string]string{
 	"Phone":    "phone",
 	"Role":     "role",
 
+	// Campos del cambio de contraseña del propio usuario.
+	"CurrentPassword": "current_password",
+	"NewPassword":     "new_password",
+
 	// Campos del módulo de terceros (contacts).
 	"Name":         "name",
 	"BusinessName": "business_name",

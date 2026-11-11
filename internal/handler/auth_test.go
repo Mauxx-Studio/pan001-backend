@@ -65,6 +65,34 @@ func (r *memUserRepository) UpdateLastLogin(_ context.Context, id uuid.UUID, log
 	return model.ErrUserNotFound
 }
 
+func (r *memUserRepository) Update(_ context.Context, user *model.User) error {
+	for _, stored := range r.users {
+		if stored.ID != user.ID {
+			continue
+		}
+		if existing, taken := r.users[user.Email]; taken && existing.ID != user.ID {
+			return model.ErrEmailAlreadyExists
+		}
+		if stored.Email != user.Email {
+			delete(r.users, stored.Email)
+		}
+		user.UpdatedAt = time.Now().UTC()
+		r.users[user.Email] = user
+		return nil
+	}
+	return model.ErrUserNotFound
+}
+
+func (r *memUserRepository) UpdatePassword(_ context.Context, id uuid.UUID, passwordHash string) error {
+	for _, user := range r.users {
+		if user.ID == id {
+			user.PasswordHash = passwordHash
+			return nil
+		}
+	}
+	return model.ErrUserNotFound
+}
+
 // staticTokenGenerator devuelve siempre el mismo token.
 type staticTokenGenerator struct{}
 

@@ -54,6 +54,8 @@ y cierra el pool de conexiones de PostgreSQL antes de terminar.
 | `POST`   | `/api/v1/auth/register` | `201 Created` · datos del usuario + token        |
 | `POST`   | `/api/v1/auth/login`    | `200 OK` · datos del usuario + token             |
 | `GET`    | `/api/v1/auth/me`       | `200 OK` · usuario autenticado (requiere token)  |
+| `PUT`    | `/api/v1/auth/me`       | `200 OK` · perfil propio actualizado (requiere token) |
+| `PUT`    | `/api/v1/auth/me/password` | `204 No Content` · contraseña cambiada (requiere token) |
 | `POST`   | `/api/v1/contacts`      | `201 Created` · tercero creado (requiere token)  |
 | `GET`    | `/api/v1/contacts`      | `200 OK` · lista de terceros con filtros         |
 | `GET`    | `/api/v1/contacts/:id`  | `200 OK` · tercero (requiere token)              |
@@ -163,6 +165,70 @@ aunque el JWT siga vigente.
 | Usuario del token ya eliminado                     | `401`  | `{"error":"el usuario del token ya no existe"}`            |
 | Usuario del token desactivado                      | `401`  | `{"error":"el usuario está desactivado"}`                  |
 
+### Actualizar el perfil propio
+
+`PUT /api/v1/auth/me` modifica el usuario dueño del token. El id sale de
+`middleware.GetUserID(c)` (lo publica `Authenticate`), nunca del body, así que la
+ruta no permite editar a otra persona.
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/auth/me \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"full_name": "María Pérez Gómez", "phone": "1155559999"}'
+```
+
+Responde `200 OK` con el usuario actualizado (misma forma que `GET /auth/me`).
+
+- Actualización **parcial**: solo se escriben los campos enviados; el resto conserva
+  su valor actual (el DTO usa punteros para distinguir "no enviado" de "vacío").
+- `email` se normaliza (minúsculas y sin espacios) y `full_name`/`phone` se recortan.
+- `role` e `is_active` **no** son editables por esta vía: si llegan en el JSON se
+  ignoran, porque cambiarlos es una operación de administración y aceptarlos acá
+  sería una escalada de privilegios.
+- El cambio de email es inmediato y no pide verificación. Los tokens ya emitidos
+  siguen siendo válidos (el JWT guarda el email del momento de la emisión, pero las
+  consultas usan el `user_id`), así que la respuesta de `GET /auth/me` ya muestra el
+  email nuevo.
+
+| Situación                                              | Código | Body                                             |
+| ------------------------------------------------------ | ------ | ------------------------------------------------ |
+| Email con formato inválido o campos fuera de rango     | `400`  | `{"error":"datos inválidos: ..."}`               |
+| `full_name` con menos de 2 caracteres                   | `400`  | `{"error":"datos inválidos: full_name debe tener al menos 2 caracteres"}` |
+| `full_name` que queda vacío al recortar espacios       | `400`  | `{"error":"el nombre completo es obligatorio"}`  |
+| `email` vacío                                          | `400`  | `{"error":"el email es obligatorio"}`            |
+| Email nuevo ya registrado por otro usuario             | `409`  | `{"error":"el email ya está registrado"}`        |
+| Token ausente, inválido, o usuario inexistente/inactivo | `401`  | ver la tabla anterior                            |
+
+### Cambiar la contraseña
+
+`PUT /api/v1/auth/me/password` pide la contraseña actual como confirmación y
+guarda la nueva hasheada: responde `204 No Content`, sin body.
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/auth/me/password \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"current_password": "secreto123", "new_password": "nuevaClave123"}'
+```
+
+- `new_password` debe tener entre 8 y 72 caracteres (el tope de 72 existe porque
+  bcrypt ignora silenciosamente lo que exceda 72 bytes).
+- `current_password` se compara con el hash guardado; si no coincide responde `400`
+  con `{"error":"la contraseña actual no es correcta"}` y no cambia nada.
+- El hash nuevo se genera con bcrypt cost 12 y la contraseña nunca vuelve al cliente.
+- Como el JWT es stateless, los access tokens ya emitidos **siguen vigentes**: la
+  contraseña nueva aplica a los próximos logins. Revocar sesiones requiere una lista
+  de revocación o un `token_version` en el usuario (ver siguientes pasos).
+
+| Situación                                    | Código | Body                                                              |
+| -------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| `current_password` incorrecta                | `400`  | `{"error":"la contraseña actual no es correcta"}`                 |
+| `current_password` o `new_password` faltantes | `400`  | `{"error":"datos inválidos: current_password es obligatorio"}`   |
+| `new_password` de menos de 8 caracteres      | `400`  | `{"error":"datos inválidos: new_password debe tener al menos 8 caracteres"}` |
+| `new_password` de más de 72 caracteres       | `400`  | `{"error":"datos inválidos: new_password debe tener como máximo 72 caracteres"}` |
+| Token ausente, inválido, o usuario inexistente/inactivo | `401`  | ver la tabla de `GET /auth/me`                          |
+
 ### Rutas protegidas (middleware)
 
 `internal/middleware` aporta dos middlewares que se montan sobre grupos de rutas:
@@ -198,6 +264,7 @@ pasó por `Authenticate`.
 | Email o contraseña incorrectos (incluye soft-deleted)       | `401`  | `{"error":"email o contraseña incorrectos"}`                      |
 | Usuario con `is_active = false`                             | `403`  | `{"error":"el usuario está desactivado"}`                         |
 | Email ya registrado                                         | `409`  | `{"error":"el email ya está registrado"}`                         |
+| Contraseña actual incorrecta al cambiarla                   | `400`  | `{"error":"la contraseña actual no es correcta"}`                 |
 | Error inesperado (se loguea en el servidor)                 | `500`  | `{"error":"error interno del servidor"}`                          |
 
 Roles válidos: `admin`, `vendedor` (por defecto), `panadero`, `cajero`, `supervisor`.
@@ -686,7 +753,7 @@ backend/
 │   ├── config/          # Carga de configuración (env, flags, archivos)
 │   │   └── config.go
 │   ├── handler/         # Handlers HTTP: parsean request y escriben response
-│   │   ├── auth.go          # Endpoints de registro, login y perfil (/me)
+│   │   ├── auth.go          # Endpoints de registro, login y perfil propio (GET/PUT /me)
 │   │   ├── auth_dto.go      # Request/response y mapeo a DTOs (sin password_hash)
 │   │   ├── contact.go       # CRUD de terceros (rutas protegidas por JWT)
 │   │   ├── contact_dto.go   # Request/response de terceros
@@ -723,7 +790,7 @@ backend/
 │   ├── router/          # Registro de grupos de rutas (/api/v1)
 │   │   └── router.go
 │   └── service/         # Lógica de negocio (orquesta repositorios)
-│       ├── auth.go          # Casos de uso Register, Login y Profile
+│       ├── auth.go          # Casos de uso Register, Login, Profile, UpdateProfile y ChangePassword
 │       ├── contact.go       # Casos de uso CRUD de terceros
 │       ├── order.go         # Casos de uso de pedidos: totales, códigos y líneas
 │       └── product.go       # Casos de uso CRUD del catálogo y reglas de stock

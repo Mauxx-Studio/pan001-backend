@@ -22,6 +22,24 @@ type loginRequest struct {
 	Password string `json:"password" validate:"required,max=72"`
 }
 
+// updateProfileRequest es el body de PUT /api/v1/auth/me.
+//
+// Todos los campos son opcionales: solo se actualizan los punteros no nulos, de
+// modo que el cliente puede enviar únicamente lo que cambia. role e is_active no
+// se aceptan: cambiarlos es una operación de administración que este endpoint no
+// expone (si llegan en el JSON, el binder los ignora).
+type updateProfileRequest struct {
+	Email    *string `json:"email" validate:"omitempty,email,max=255"`
+	FullName *string `json:"full_name" validate:"omitempty,min=2,max=150"`
+	Phone    *string `json:"phone" validate:"omitempty,max=30"`
+}
+
+// changePasswordRequest es el body de PUT /api/v1/auth/me/password.
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required,max=72"`
+	NewPassword     string `json:"new_password" validate:"required,min=8,max=72"`
+}
+
 // userResponse es la representación pública del usuario: nunca incluye el hash
 // de la contraseña.
 type userResponse struct {

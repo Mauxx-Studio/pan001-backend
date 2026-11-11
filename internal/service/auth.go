@@ -23,6 +23,10 @@ const (
 	// maxPasswordBytes es el máximo que bcrypt procesa: lo que exceda 72 bytes
 	// se ignora silenciosamente, así que lo rechazamos de forma explícita.
 	maxPasswordBytes = 72
+	// minPasswordLength es el mínimo de caracteres de una contraseña nueva.
+	// Register lo valida en el DTO; ChangePassword lo revalida aquí porque es
+	// el punto donde el usuario elige la contraseña que se va a guardar.
+	minPasswordLength = 8
 )
 
 // TokenGenerator es el puerto de emisión de access tokens. La implementación
@@ -167,6 +171,112 @@ func (s *AuthService) Profile(ctx context.Context, userID uuid.UUID) (*model.Use
 	}
 
 	return user, nil
+}
+
+// UpdateProfileInput son los campos que el propio usuario puede modificar. Un
+// puntero en nil significa "no tocar": el endpoint PUT actualiza solo lo que se
+// envía, igual que en el resto de los módulos.
+//
+// role e is_active quedan fuera a propósito: cambiarlos es una operación de
+// administración y aceptarlos aquí sería una escalada de privilegios.
+type UpdateProfileInput struct {
+	Email    *string
+	FullName *string
+	Phone    *string
+}
+
+// UpdateProfile modifica el perfil del usuario autenticado. El id sale del
+// access token, nunca del body, así que solo se puede editar el propio registro.
+//
+// Reglas:
+//   - Si el usuario no existe (o fue soft-deleted) → model.ErrUserNotFound.
+//   - Si el usuario está desactivado → model.ErrUserInactive.
+//   - full_name, si se envía, no puede quedar vacío → model.ErrUserNameRequired.
+//   - email, si se envía, se normaliza y no puede quedar vacío
+//     → model.ErrEmailRequired; si ya lo usa otro usuario
+//     → model.ErrEmailAlreadyExists.
+//   - Los campos ausentes conservan su valor actual.
+//
+// Nota: como no hay verificación de emails, un cambio de email se aplica de
+// inmediato; el token vigente mantiene el email anterior en sus claims, pero las
+// consultas a la base ya devuelven el nuevo.
+func (s *AuthService) UpdateProfile(ctx context.Context, userID uuid.UUID, in UpdateProfileInput) (*model.User, error) {
+	user, err := s.Profile(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Se calculan los valores nuevos antes de tocar la entidad para no dejar el
+	// usuario a medio modificar si una validación falla.
+	email := user.Email
+	if in.Email != nil {
+		email = model.NormalizeEmail(*in.Email)
+		if email == "" {
+			return nil, model.ErrEmailRequired
+		}
+	}
+
+	fullName := user.FullName
+	if in.FullName != nil {
+		fullName = strings.TrimSpace(*in.FullName)
+		if fullName == "" {
+			return nil, model.ErrUserNameRequired
+		}
+	}
+
+	phone := user.Phone
+	if in.Phone != nil {
+		phone = strings.TrimSpace(*in.Phone)
+	}
+
+	user.Email, user.FullName, user.Phone = email, fullName, phone
+
+	// La unicidad del email la garantiza el índice único de la base de datos,
+	// que el repositorio traduce a model.ErrEmailAlreadyExists.
+	if err := s.users.Update(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// ChangePassword cambia la contraseña del usuario autenticado.
+//
+// Reglas:
+//   - Si el usuario no existe (o fue soft-deleted) → model.ErrUserNotFound.
+//   - Si el usuario está desactivado → model.ErrUserInactive.
+//   - La contraseña actual debe coincidir con la guardada; si no
+//     → model.ErrInvalidCurrentPassword.
+//   - La contraseña nueva se guarda hasheada (bcrypt cost 12); si es más corta
+//     que el mínimo → model.ErrPasswordTooShort y si supera lo que bcrypt
+//     procesa → model.ErrPasswordTooLong.
+//
+// Los access tokens ya emitidos no se invalidan porque el JWT es stateless: la
+// contraseña nueva aplica a los próximos logins.
+func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) error {
+	user, err := s.Profile(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+		return model.ErrInvalidCurrentPassword
+	}
+
+	if len(newPassword) < minPasswordLength {
+		return model.ErrPasswordTooShort
+	}
+
+	passwordHash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	if err := s.users.UpdatePassword(ctx, user.ID, passwordHash); err != nil {
+		return err
+	}
+	user.PasswordHash = passwordHash
+
+	return nil
 }
 
 // hashPassword genera el hash bcrypt de la contraseña.

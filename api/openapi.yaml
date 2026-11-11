@@ -188,6 +188,113 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    put:
+      summary: Actualizar el perfil del usuario autenticado
+      description: |
+        Modifica el propio registro del usuario dueño del access token: el id
+        sale del token y nunca del body, así que no se puede editar a otro
+        usuario. Solo se actualizan los campos enviados; `role` e `is_active` se
+        ignoran porque cambiarlos es una operación de administración.
+      operationId: updateCurrentUser
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Usuario actualizado (sin `password_hash`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Body inválido, o `full_name`/`email` que quedan vacíos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                datosInvalidos:
+                  value:
+                    error: "datos inválidos: email debe ser un email válido"
+                nombreVacio:
+                  value:
+                    error: el nombre completo es obligatorio
+        "401":
+          description: |
+            Token ausente, con formato inválido, expirado o con firma inválida.
+            También cuando el usuario del token ya no existe o está desactivado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: El email nuevo ya pertenece a otro usuario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: el email ya está registrado
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/me/password:
+    put:
+      summary: Cambiar la contraseña del usuario autenticado
+      description: |
+        Exige la contraseña actual como confirmación y guarda la nueva hasheada
+        con bcrypt (cost 12). Responde 204 sin body: la contraseña nunca vuelve
+        al cliente. Los access tokens ya emitidos siguen vigentes porque el JWT
+        es stateless; la contraseña nueva aplica a los próximos logins.
+      operationId: changeCurrentUserPassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "204":
+          description: Contraseña actualizada (sin body).
+        "400":
+          description: |
+            Body inválido, contraseña nueva fuera del rango de 8 a 72
+            caracteres o contraseña actual incorrecta.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                actualIncorrecta:
+                  value:
+                    error: la contraseña actual no es correcta
+                nuevaCorta:
+                  value:
+                    error: "datos inválidos: new_password debe tener al menos 8 caracteres"
+        "401":
+          description: |
+            Token ausente, con formato inválido, expirado o con firma inválida.
+            También cuando el usuario del token ya no existe o está desactivado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Error inesperado del servidor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/contacts:
     post:
       summary: Crear un tercero
@@ -1092,6 +1199,43 @@ components:
           type: string
           format: password
           example: secreto123
+    UpdateProfileRequest:
+      type: object
+      description: |
+        Campos editables del propio perfil. Todos son opcionales: los que no se
+        envían conservan su valor actual. `role` e `is_active` no se aceptan.
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: maria@pan001.com
+        full_name:
+          type: string
+          minLength: 2
+          maxLength: 150
+          example: María Pérez
+        phone:
+          type: string
+          maxLength: 30
+          example: "1155550000"
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          format: password
+          maxLength: 72
+          description: Contraseña vigente, se verifica contra el hash guardado.
+          example: secreto123
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: Se guarda hasheada con bcrypt (cost 12).
+          example: nuevaClave123
     AuthResponse:
       type: object
       required: [token, token_type, user]

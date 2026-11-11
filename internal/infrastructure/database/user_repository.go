@@ -72,6 +72,41 @@ func (r *userRepository) UpdateLastLogin(ctx context.Context, id uuid.UUID, logg
 	return nil
 }
 
+// Update guarda los cambios de perfil del usuario. No toca la contraseña: para
+// eso está UpdatePassword. El email duplicado lo detecta el índice único de
+// PostgreSQL, que con TranslateError: true llega como gorm.ErrDuplicatedKey.
+func (r *userRepository) Update(ctx context.Context, user *model.User) error {
+	result := r.db.WithContext(ctx).Save(user)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrDuplicatedKey) {
+			return model.ErrEmailAlreadyExists
+		}
+		return fmt.Errorf("actualizando usuario: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		// Puede pasar si el usuario fue eliminado entre la lectura y el Save.
+		return model.ErrUserNotFound
+	}
+	return nil
+}
+
+// UpdatePassword guarda el hash de la contraseña nueva. Al ser un Update sobre
+// el modelo, GORM aplica el scope del soft delete y actualiza UpdatedAt.
+func (r *userRepository) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.User{}).
+		Where("id = ?", id).
+		Update("password_hash", passwordHash)
+
+	if result.Error != nil {
+		return fmt.Errorf("actualizando la contraseña: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return model.ErrUserNotFound
+	}
+	return nil
+}
+
 // translateUserError convierte los errores de GORM en errores de dominio para
 // que el service no tenga que importar gorm.
 func translateUserError(err error) error {
